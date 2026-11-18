@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "ShopKeep authenticated owner profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "shopName": { "type": "string" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["uid", "updatedAt"]
+    },
+    "ShopTask": {
+      "title": "ShopTask",
+      "description": "Shop operation task, bill, or maintenance item",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "areaId": { "type": "string" },
+        "priority": { "type": "string" },
+        "isCompleted": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "dueDateMillis": { "type": ["integer", "null"] },
+        "reminderTimeMillis": { "type": ["integer", "null"] },
+        "repeatRule": { "type": "string" },
+        "mediaUris": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["title", "isCompleted", "isDeleted", "createdAt", "userId"]
+    },
+    "ShopZone": {
+      "title": "ShopZone",
+      "description": "Physical shop zone or counter area",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "iconName": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["name", "createdAt", "userId"]
+    },
+    "ShopRoutine": {
+      "title": "ShopRoutine",
+      "description": "Daily or weekly shop opening/closing routine",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "frequency": { "type": "string" },
+        "category": { "type": "string" },
+        "streakCount": { "type": "integer" },
+        "completedDates": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["title", "frequency", "streakCount", "createdAt", "userId"]
+    },
+    "ShopPhotoRecord": {
+      "title": "ShopPhotoRecord",
+      "description": "Photo or visual receipt/shelf record for a shop category",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "notes": { "type": "string" },
+        "imageUri": { "type": "string" },
+        "imageBase64": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["title", "category", "createdAt", "userId"]
+    },
+    "ChecklistItem": {
+      "title": "ChecklistItem",
+      "description": "Personal shop checklist or restock item",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "quantity": { "type": "string" },
+        "category": { "type": "string" },
+        "notes": { "type": "string" },
+        "isChecked": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "orderIndex": { "type": "integer" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["title", "category", "isChecked", "isDeleted", "createdAt", "userId"]
+    },
+    "ChecklistCategory": {
+      "title": "ChecklistCategory",
+      "description": "Custom or hidden default checklist category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "isHidden": { "type": "boolean" },
+        "sortOrder": { "type": "integer" },
+        "createdAt": { "type": "integer" },
+        "userId": { "type": "string" }
+      },
+      "required": ["name", "isHidden", "createdAt", "userId"]
+    },
+    "SharedChecklist": {
+      "title": "SharedChecklist",
+      "description": "Real-time shared staff/supplier checklist board",
+      "type": "object",
+      "properties": {
+        "shareCode": { "type": "string" },
+        "title": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array", "items": { "type": "string" } },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["shareCode", "title", "ownerId", "memberIds", "createdAt"]
+    },
+    "SharedChecklistItem": {
+      "title": "SharedChecklistItem",
+      "description": "Item inside a real-time shared checklist board",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "quantity": { "type": "string" },
+        "category": { "type": "string" },
+        "notes": { "type": "string" },
+        "isChecked": { "type": "boolean" },
+        "addedByUid": { "type": "string" },
+        "addedByName": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["title", "category", "isChecked", "addedByUid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner profile document"
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/ShopTask" },
+      "description": "Shop tasks, bills, and maintenance items"
+    },
+    "/users/{userId}/areas/{areaId}": {
+      "schema": { "$ref": "#/entities/ShopZone" },
+      "description": "Shop physical zones and counters"
+    },
+    "/users/{userId}/habits/{habitId}": {
+      "schema": { "$ref": "#/entities/ShopRoutine" },
+      "description": "Recurring daily and weekly shop routines"
+    },
+    "/users/{userId}/photos/{photoId}": {
+      "schema": { "$ref": "#/entities/ShopPhotoRecord" },
+      "description": "Shop photos, bills, and shelf visual records"
+    },
+    "/users/{userId}/checklist_items/{itemId}": {
+      "schema": { "$ref": "#/entities/ChecklistItem" },
+      "description": "Personal shop checklist items"
+    },
+    "/users/{userId}/checklist_categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/ChecklistCategory" },
+      "description": "User checklist categories and visibility overrides"
+    },
+    "/shared_checklists/{shareId}": {
+      "schema": { "$ref": "#/entities/SharedChecklist" },
+      "description": "Collaborative real-time shared checklist boards"
+    },
+    "/shared_checklists/{shareId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/SharedChecklistItem" },
+      "description": "Items in a shared checklist board"
+    }
+  }
+}

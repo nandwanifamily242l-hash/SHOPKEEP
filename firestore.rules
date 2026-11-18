@@ -1,0 +1,151 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidNonEmptyString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    function isNullableInt(map, key) {
+      return !(key in map) || map[key] == null || map[key] is int;
+    }
+
+    function isValidTask(data, userId) {
+      return isValidNonEmptyString(data.title, 200)
+        && data.isCompleted is bool
+        && data.isDeleted is bool
+        && data.createdAt is int
+        && data.userId == userId
+        && isNullableInt(data, 'dueDateMillis')
+        && isNullableInt(data, 'reminderTimeMillis');
+    }
+
+    function isValidArea(data, userId) {
+      return isValidNonEmptyString(data.name, 100)
+        && data.createdAt is int
+        && data.userId == userId;
+    }
+
+    function isValidHabit(data, userId) {
+      return isValidNonEmptyString(data.title, 150)
+        && data.frequency is string
+        && data.streakCount is int
+        && data.streakCount >= 0
+        && data.createdAt is int
+        && data.userId == userId;
+    }
+
+    function isValidPhoto(data, userId) {
+      return isValidNonEmptyString(data.title, 200)
+        && isValidNonEmptyString(data.category, 100)
+        && data.createdAt is int
+        && data.userId == userId;
+    }
+
+    function isValidChecklistItem(data, userId) {
+      return isValidNonEmptyString(data.title, 200)
+        && isValidNonEmptyString(data.category, 100)
+        && data.isChecked is bool
+        && data.isDeleted is bool
+        && data.createdAt is int
+        && data.userId == userId;
+    }
+
+    function isValidChecklistCategory(data, userId) {
+      return isValidNonEmptyString(data.name, 100)
+        && data.isHidden is bool
+        && data.createdAt is int
+        && data.userId == userId;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.updatedAt is int;
+      allow delete: if isOwner(userId);
+
+      match /tasks/{taskId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidTask(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /areas/{areaId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidArea(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /habits/{habitId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidHabit(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /photos/{photoId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidPhoto(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /checklist_items/{itemId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidChecklistItem(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /checklist_categories/{categoryId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidChecklistCategory(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    match /shared_checklists/{shareId} {
+      allow get: if true;
+      allow list: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid
+        || request.auth.uid in resource.data.memberIds
+      );
+      allow create: if isSignedIn()
+        && isValidNonEmptyString(request.resource.data.shareCode, 40)
+        && isValidNonEmptyString(request.resource.data.title, 120)
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.memberIds is list
+        && request.resource.data.createdAt is int;
+      allow update: if isSignedIn()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && isValidNonEmptyString(request.resource.data.title, 120)
+        && (
+          resource.data.ownerId == request.auth.uid
+          || request.auth.uid in resource.data.memberIds
+          || (
+            request.resource.data.memberIds is list
+            && request.auth.uid in request.resource.data.memberIds
+            && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+          )
+        );
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      match /items/{itemId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn()
+          && exists(/databases/$(database)/documents/shared_checklists/$(shareId));
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

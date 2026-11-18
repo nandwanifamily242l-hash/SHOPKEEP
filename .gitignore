@@ -1,0 +1,16 @@
+*.apk
+!ShopKeep.apk
+*.aab
+*.iml
+.gradle/
+build/
+app/build/
+.idea/
+local.properties
+.env
+*-debug.log
+firebase-debug.log
+firestore-debug.log
+.DS_Store
+captures/
+.cxx/

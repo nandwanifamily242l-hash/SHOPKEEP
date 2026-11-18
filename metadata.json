@@ -1,0 +1,8 @@
+{
+  "name": "ShopKeep",
+  "description": "ShopKeep — complete retail shop operations, inventory, checklists, staff routines, photo records, and real-time shared web checklists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

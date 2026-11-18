@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<resources>
+    <string name="firestore_database_id" translatable="false">ai-studio-android-homekeep-8502e84b-2339-4853-b108-eaf44e3bbe94</string>
+    <string name="recaptcha_site_key" translatable="false">6LdskCEuAAAAAMne65GUj_aV8n54JIvf4xdyQ14_</string>
+</resources>

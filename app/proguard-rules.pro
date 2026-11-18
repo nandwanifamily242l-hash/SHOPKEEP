@@ -1,0 +1,3 @@
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-keep class com.example.data.model.** { *; }
+-dontwarn java.awt.**
