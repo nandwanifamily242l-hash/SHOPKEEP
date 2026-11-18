@@ -2,17 +2,15 @@
 
 Real-time synchronized checklist viewer and editor powered by Firebase Firestore (`ai-studio-android-homekeep-8502e84b-2339-4853-b108-eaf44e3bbe94`).
 
-## No-Command-Line Deployment (No Cloud Shell Needed)
+## Public Link Setup (No Share Code & No Sign-In Needed)
 
-### Option 1: Netlify Drop (Fastest — ~10 seconds)
-1. Download the project ZIP and extract it.
-2. Open **https://app.netlify.com/drop** in any browser.
-3. Drag and drop the **`web`** folder onto the page.
-4. Copy the live URL Netlify gives you (e.g., `https://your-site.netlify.app`).
-5. In the ShopKeep Android app, open **Checklist -> Shared Live Boards -> Share URL**, tap the pencil icon next to **LIVE WEB URL**, and paste your Netlify URL once.
+1. Push the project to GitHub (`Push to GitHub` in AI Studio) so GitHub Pages updates with the latest `web/`, `docs/`, and root `index.html`.
+2. Open the **ShopKeep** Android app, go to **Checklist -> My Stock Lists**, and tap **"Publish & Share Public Live Link (No Code)"** once.
+3. In the Share dialog, tap the **Edit (pencil)** icon next to **PUBLIC LINK**, paste your GitHub Pages URL (for example `https://nandwanifamily242l-hash.github.io/<repo-name>`), and tap **Save**.
+4. Share that plain URL with anyone — when they open it in any browser, it automatically loads your live shop checklist with **zero share codes** and **no Google sign-in alert**!
 
-### Option 2: Push to GitHub + GitHub Pages / Vercel / Cloudflare Pages
-1. Use **Push to GitHub** in AI Studio.
-2. Either enable **GitHub Pages** in repository **Settings -> Pages** or connect the repo in **Vercel** / **Cloudflare Pages** (set publish directory to `web`).
+## Adding Restrictions Later
 
-> **Note for Live Editing in Browser:** Viewing any board (`?checklist=SHARE_CODE`) works immediately on any host. To also allow Google Sign-In editing on a custom domain (like `your-site.netlify.app`), add that domain under **Firebase Console -> Authentication -> Settings -> Authorized domains**.
+Whenever you want to restrict browser edits to signed-in users only:
+- In the ShopKeep Android app, open **Checklist -> Shared Live Boards -> Public Link** and toggle **"Open Public Editing"** OFF.
+- Visitors can still view the checklist in real time, and editing requires Google Sign-In (remember to add your GitHub Pages domain `nandwanifamily242l-hash.github.io` under **Firebase Console -> Authentication -> Settings -> Authorized domains** when enabling restrictions).

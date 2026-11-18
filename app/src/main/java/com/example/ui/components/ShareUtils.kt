@@ -36,6 +36,14 @@ object ShareUtils {
             .apply()
     }
 
+    fun buildPublicLandingUrl(baseUrl: String = DEFAULT_WEB_BASE_URL): String {
+        val cleanBase = baseUrl.trim().trimEnd('/').ifBlank { DEFAULT_WEB_BASE_URL }
+        return "$cleanBase/"
+    }
+
+    fun buildPublicLandingUrl(context: Context): String =
+        buildPublicLandingUrl(getWebBaseUrl(context))
+
     fun buildLiveWebUrl(shareCode: String, baseUrl: String = DEFAULT_WEB_BASE_URL): String {
         val cleanBase = baseUrl.trim().trimEnd('/').ifBlank { DEFAULT_WEB_BASE_URL }
         return "$cleanBase/?checklist=${URLEncoder.encode(shareCode.trim().uppercase(), "UTF-8")}"
@@ -103,19 +111,21 @@ object ShareUtils {
     fun buildSharedBoardShareMessage(
         context: Context,
         board: SharedChecklist,
-        items: List<SharedChecklistItem>
+        items: List<SharedChecklistItem>,
+        usePublicLandingLink: Boolean = true
     ): String {
-        val webUrl = buildLiveWebUrl(context, board.shareCode)
+        val webUrl = if (usePublicLandingLink) {
+            buildPublicLandingUrl(context)
+        } else {
+            buildLiveWebUrl(context, board.shareCode)
+        }
         val pendingCount = items.count { !it.isChecked }
         return buildString {
             appendLine("ShopKeep Live Checklist: ${board.title}")
-            appendLine("Code: ${board.shareCode} ($pendingCount pending items)")
+            appendLine("$pendingCount pending • ${items.size} total items")
             appendLine()
-            appendLine("Open live in browser (no app download needed):")
+            appendLine("Open live in browser (no app or code needed):")
             appendLine(webUrl)
-            appendLine()
-            appendLine("Or open in ShopKeep app:")
-            appendLine(buildAppLink(board.shareCode))
         }
     }
 

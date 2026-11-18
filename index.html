@@ -12,26 +12,21 @@
       <div class="brand-badge">SK</div>
       <div>
         <h1>ShopKeep Live</h1>
-        <p class="subtitle">Real-time synced shop checklist — no app download required</p>
+        <p class="subtitle">Real-time shop checklist — open public access</p>
       </div>
     </div>
     <div class="auth-controls">
-      <span id="userLabel" class="user-label">View Mode</span>
-      <button id="signInBtn" class="btn btn-primary">Sign in with Google to Edit</button>
+      <span id="accessBadge" class="access-pill">Public Live Access</span>
+      <button id="signInBtn" class="btn btn-primary hidden">Sign in with Google to Edit</button>
       <button id="signOutBtn" class="btn btn-outline hidden">Sign out</button>
     </div>
   </header>
 
   <main class="container">
-    <section class="join-bar card">
-      <input id="codeInput" type="text" placeholder="Enter Share Code (e.g. SHOP-A1B2C3)" />
-      <button id="openCodeBtn" class="btn btn-primary">Open Live Board</button>
-    </section>
-
     <section id="boardSection" class="card hidden">
       <div class="board-header">
         <div>
-          <h2 id="boardTitle">Shared Checklist</h2>
+          <h2 id="boardTitle">Shop Stock Checklist</h2>
           <p id="boardMeta" class="subtitle"></p>
         </div>
         <span id="liveBadge" class="badge-live">LIVE SYNC</span>
@@ -48,9 +43,17 @@
     </section>
 
     <section id="emptyState" class="card empty-state">
-      <h2>Open a ShopKeep Live Checklist</h2>
-      <p>Paste a share code above or open a shared URL (<code>?checklist=SHOP-XXXXXX</code>) from your ShopKeep Android app to see real-time updates across devices.</p>
+      <h2 id="emptyTitle">Loading ShopKeep Live...</h2>
+      <p id="emptyDesc">Connecting to real-time shop checklist...</p>
     </section>
+
+    <details class="card switch-details">
+      <summary>Switch to a different board code (optional)</summary>
+      <div class="join-bar">
+        <input id="codeInput" type="text" placeholder="Optional board code (e.g. SHOP-A1B2C3)" />
+        <button id="openCodeBtn" class="btn btn-primary" type="button">Open Board</button>
+      </div>
+    </details>
   </main>
 
   <script type="module" src="web/app.js"></script>

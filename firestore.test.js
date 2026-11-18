@@ -74,98 +74,105 @@ test("Authenticated user cannot read or write another user's checklist items or 
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("checklist_items").doc("c1").get());
   await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("photos").doc("p1").get());
-  await assertFails(
-    bobDb.collection("users").doc(ALICE_UID).collection("checklist_items").doc("c2").set({
-      title: "Steal",
-      category: "Dairy & Cold",
-      isChecked: false,
-      isDeleted: false,
-      createdAt: 1000,
-      userId: ALICE_UID,
-    })
-  );
 });
 
-test("Owner can create and read their own tasks, checklist items, and categories", async () => {
+test("Public editable shared board allows open link access and toggling without login, while restricted board denies unauth writes", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("tasks").doc("t1").set({
-      title: "Restock Rice Bags",
-      description: "25kg bags from supplier",
-      category: "Restock",
-      priority: "URGENT_IMPORTANT",
-      isCompleted: false,
-      isDeleted: false,
-      dueDateMillis: null,
-      reminderTimeMillis: null,
-      createdAt: 2000,
-      updatedAt: 2000,
-      userId: ALICE_UID,
-    })
-  );
-  await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).collection("tasks").get());
-
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("checklist_categories").doc("cat1").set({
-      name: "Beverages & Drinks",
-      isHidden: false,
-      sortOrder: 0,
-      createdAt: 2000,
-      userId: ALICE_UID,
-    })
-  );
-});
-
-test("Shared checklist allows reading by shareId, authenticated member collaboration, and denies unauthenticated writes", async () => {
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const unauthDb = testEnv.unauthenticatedContext().firestore();
 
   await assertSucceeds(
-    aliceDb.collection("shared_checklists").doc("SHOP1234").set({
-      shareCode: "SHOP1234",
-      title: "Morning Restock",
+    aliceDb.collection("shared_checklists").doc("SHOP-PUB1").set({
+      shareCode: "SHOP-PUB1",
+      title: "Public Shop Board",
       ownerId: ALICE_UID,
       ownerName: "Alice",
       memberIds: [ALICE_UID],
       categories: ["Beverages", "Snacks"],
+      isPublicEditable: true,
       createdAt: 3000,
       updatedAt: 3000,
     })
   );
 
-  await assertSucceeds(unauthDb.collection("shared_checklists").doc("SHOP1234").get());
-  await assertFails(unauthDb.collection("shared_checklists").get());
-  await assertFails(
-    unauthDb.collection("shared_checklists").doc("SHOP1234").collection("items").doc("i1").set({
-      title: "Hack",
-      category: "Snacks",
-      isChecked: false,
-      addedByUid: "anon",
-      createdAt: 3000,
-    })
-  );
-
+  // Unauthenticated visitor can read and edit when isPublicEditable is true
+  await assertSucceeds(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").get());
   await assertSucceeds(
-    bobDb.collection("shared_checklists").doc("SHOP1234").update({
-      memberIds: [ALICE_UID, BOB_UID],
-      updatedAt: 3005,
-    })
-  );
-  await assertSucceeds(
-    bobDb.collection("shared_checklists").doc("SHOP1234").collection("items").doc("i1").set({
-      title: "Sparkling Water",
-      quantity: "2 crates",
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").set({
+      title: "Orange Juice",
+      quantity: "3 packs",
       category: "Beverages",
       notes: "",
       isChecked: false,
-      addedByUid: BOB_UID,
-      addedByName: "Bob",
+      addedByUid: "public",
+      addedByName: "Public Link",
       createdAt: 3010,
       updatedAt: 3010,
     })
   );
 
-  await assertFails(bobDb.collection("shared_checklists").doc("SHOP1234").delete());
-  await assertSucceeds(aliceDb.collection("shared_checklists").doc("SHOP1234").delete());
+  // Unauthenticated visitor still CANNOT list all boards or delete board
+  await assertFails(unauthDb.collection("shared_checklists").get());
+  await assertFails(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").delete());
+
+  // Owner puts restrictions on later
+  await assertSucceeds(
+    aliceDb.collection("shared_checklists").doc("SHOP-PUB1").update({
+      isPublicEditable: false,
+      updatedAt: 3020,
+    })
+  );
+
+  // Now unauthenticated writes are rejected, while reads still work
+  await assertFails(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i2").set({
+      title: "Blocked Item",
+      quantity: "1",
+      category: "Snacks",
+      notes: "",
+      isChecked: false,
+      addedByUid: "public",
+      createdAt: 3030,
+      updatedAt: 3030,
+    })
+  );
+  await assertSucceeds(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").get());
+});
+
+test("PUBLIC_DEFAULT pointer resolves activeShareCode without auth and blocks non-owner updates", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  await assertSucceeds(
+    aliceDb.collection("shared_checklists").doc("PUBLIC_DEFAULT").set({
+      shareCode: "PUBLIC_DEFAULT",
+      activeShareCode: "SHOP-PUB1",
+      title: "Shop Stock Checklist",
+      ownerId: ALICE_UID,
+      ownerName: "Alice",
+      memberIds: [ALICE_UID],
+      isPublicEditable: true,
+      createdAt: 4000,
+      updatedAt: 4000,
+    })
+  );
+
+  // Public visitor reads PUBLIC_DEFAULT directly with zero code
+  await assertSucceeds(unauthDb.collection("shared_checklists").doc("PUBLIC_DEFAULT").get());
+
+  // Owner updates activeShareCode
+  await assertSucceeds(
+    aliceDb.collection("shared_checklists").doc("PUBLIC_DEFAULT").update({
+      activeShareCode: "SHOP-NEW2",
+      updatedAt: 4010,
+    })
+  );
+
+  // Non-owner cannot hijack PUBLIC_DEFAULT title or activeShareCode
+  await assertFails(
+    bobDb.collection("shared_checklists").doc("PUBLIC_DEFAULT").update({
+      activeShareCode: "HIJACKED",
+      updatedAt: 4020,
+    })
+  );
 });

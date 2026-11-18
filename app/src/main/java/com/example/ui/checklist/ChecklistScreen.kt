@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Html
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -220,6 +221,20 @@ fun ChecklistScreen(
                             }
                         }
                     }
+
+                    Button(
+                        onClick = {
+                            viewModel.publishPersonalListToPublicBoard {
+                                selectedSubTab = 1
+                                showShareDialog = true
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("publish_public_link_button")
+                    ) {
+                        Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Publish & Share Public Live Link (No Code)")
+                    }
                 }
 
                 LazyColumn(
@@ -412,7 +427,11 @@ fun ChecklistScreen(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(activeBoard.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                         Text(
-                                            text = "Code: ${activeBoard.shareCode} • ${activeBoard.memberIds.size} member(s)",
+                                            text = if (activeBoard.isPublicEditable) {
+                                                "Public Open Access • Anyone can open & edit"
+                                            } else {
+                                                "Restricted Edit • Google Sign-In required"
+                                            },
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
@@ -422,7 +441,7 @@ fun ChecklistScreen(
                                     ) {
                                         Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Share URL")
+                                        Text("Public Link")
                                     }
                                 }
                             }
@@ -736,6 +755,12 @@ fun ChecklistScreen(
         ShareLinkReadyDialog(
             board = currentBoard,
             items = uiState.activeSharedItems,
+            onTogglePublicEditable = { enabled ->
+                viewModel.toggleSharedBoardPublicEditable(currentBoard.shareCode, enabled)
+            },
+            onSetAsPublicDefault = {
+                viewModel.setBoardAsPublicDefault(currentBoard)
+            },
             onDismiss = { showShareDialog = false }
         )
     }

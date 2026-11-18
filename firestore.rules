@@ -67,6 +67,18 @@ service cloud.firestore {
         && data.userId == userId;
     }
 
+    function isPublicBoardEditable(shareId) {
+      let board = get(/databases/$(database)/documents/shared_checklists/$(shareId)).data;
+      return !('isPublicEditable' in board) || board.isPublicEditable == true;
+    }
+
+    function isValidSharedItem(data) {
+      return isValidNonEmptyString(data.title, 200)
+        && isValidNonEmptyString(data.category, 100)
+        && data.isChecked is bool
+        && data.createdAt is int;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create, update: if isOwner(userId)
@@ -139,8 +151,11 @@ service cloud.firestore {
 
       match /items/{itemId} {
         allow read: if true;
-        allow create, update, delete: if isSignedIn()
-          && exists(/databases/$(database)/documents/shared_checklists/$(shareId));
+        allow create, update: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
+          && (isSignedIn() || isPublicBoardEditable(shareId))
+          && isValidSharedItem(request.resource.data);
+        allow delete: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
+          && (isSignedIn() || isPublicBoardEditable(shareId));
       }
     }
 

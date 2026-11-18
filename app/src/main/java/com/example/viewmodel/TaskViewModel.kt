@@ -133,6 +133,9 @@ class TaskViewModel(
                     .catch { handleFlowError(it) }
                     .collect { boards ->
                         _uiState.update { it.copy(sharedChecklists = boards) }
+                        if (_uiState.value.activeSharedCode == null && boards.isNotEmpty()) {
+                            selectSharedChecklist(boards.first().shareCode)
+                        }
                     }
             }
         )
@@ -513,8 +516,57 @@ class TaskViewModel(
             repository.createSharedChecklist(title)
                 .onSuccess { code ->
                     selectSharedChecklist(code)
-                    _uiState.update { it.copy(statusBanner = "Live board $code ready to share") }
+                    _uiState.update { it.copy(statusBanner = "Public live board $code ready to share") }
                     onCreated(code)
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun publishPersonalListToPublicBoard(
+        title: String = "Shop Stock Checklist",
+        onReady: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.publishPersonalChecklistToPublicBoard(
+                items = _uiState.value.checklistItems,
+                title = title
+            )
+                .onSuccess { code ->
+                    selectSharedChecklist(code)
+                    _uiState.update { it.copy(statusBanner = "Public live link is ready!") }
+                    onReady(code)
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun toggleSharedBoardPublicEditable(shareCode: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setSharedBoardPublicEditable(shareCode, enabled)
+                .onSuccess {
+                    val msg = if (enabled) {
+                        "Public editing ON — anyone with the link can view & edit"
+                    } else {
+                        "Restricted mode — Google Sign-In required to edit"
+                    }
+                    _uiState.update { it.copy(statusBanner = msg) }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun setBoardAsPublicDefault(board: SharedChecklist) {
+        viewModelScope.launch {
+            repository.setPublicDefaultBoard(board.shareCode, board.title, board.isPublicEditable)
+                .onSuccess {
+                    _uiState.update { it.copy(statusBanner = "\"${board.title}\" set as your main Public Link") }
                 }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }

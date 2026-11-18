@@ -10,14 +10,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Sms
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,28 +51,38 @@ import com.example.data.model.SharedChecklistItem
 fun ShareLinkReadyDialog(
     board: SharedChecklist,
     items: List<SharedChecklistItem>,
+    onTogglePublicEditable: (Boolean) -> Unit = {},
+    onSetAsPublicDefault: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     var baseUrl by remember { mutableStateOf(ShareUtils.getWebBaseUrl(context)) }
     var showEditHostDialog by remember { mutableStateOf(false) }
 
-    val webUrl = ShareUtils.buildLiveWebUrl(board.shareCode, baseUrl)
-    val appLink = ShareUtils.buildAppLink(board.shareCode)
-    val shareMessage = ShareUtils.buildSharedBoardShareMessage(context, board, items)
+    val publicUrl = ShareUtils.buildPublicLandingUrl(baseUrl)
+    val boardSpecificUrl = ShareUtils.buildLiveWebUrl(board.shareCode, baseUrl)
+    val shareMessage = ShareUtils.buildSharedBoardShareMessage(
+        context = context,
+        board = board,
+        items = items,
+        usePublicLandingLink = true
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Share Real-Time Checklist",
+                text = "Share Public Live Link",
                 fontWeight = FontWeight.Bold
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
-                    text = "Anyone can open the Live Web URL in any browser to view & sync stock in real time without installing the app.",
+                    text = "Anyone can open your public link in any browser immediately — no code and no app download required.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -84,38 +98,49 @@ fun ShareLinkReadyDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "LIVE WEB URL (NO DOWNLOAD NEEDED)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Public,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "PUBLIC LINK (NO CODE NEEDED)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                             IconButton(
                                 onClick = { showEditHostDialog = true },
                                 modifier = Modifier.testTag("edit_web_host_button")
                             ) {
-                                Icon(Icons.Rounded.Edit, contentDescription = "Change Web Host URL")
+                                Icon(Icons.Rounded.Edit, contentDescription = "Change GitHub Pages or Web URL")
                             }
                         }
                         Text(
-                            text = webUrl,
+                            text = publicUrl,
                             style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { ShareUtils.copyToClipboard(context, "Live Web URL", webUrl) },
+                                onClick = { ShareUtils.copyToClipboard(context, "Public Link", publicUrl) },
                                 modifier = Modifier.weight(1f).testTag("copy_web_url_button")
                             ) {
                                 Icon(Icons.Rounded.ContentCopy, contentDescription = null)
                                 Spacer(Modifier.width(4.dp))
-                                Text("Copy URL")
+                                Text("Copy Link")
                             }
                             OutlinedButton(
                                 onClick = {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(publicUrl)))
                                 },
                                 modifier = Modifier.weight(1f).testTag("open_web_url_button")
                             ) {
@@ -132,33 +157,53 @@ fun ShareLinkReadyDialog(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = "SHARE CODE & APP LINK",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Code: ${board.shareCode}",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = appLink,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        OutlinedButton(
-                            onClick = { ShareUtils.copyToClipboard(context, "Share Code", board.shareCode) },
-                            modifier = Modifier.fillMaxWidth().testTag("copy_share_code_button")
-                        ) {
-                            Icon(Icons.Rounded.Link, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Copy Share Code (${board.shareCode})")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.LockOpen,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Open Public Editing",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Text(
+                                text = if (board.isPublicEditable) {
+                                    "Anyone with link can check & add items without login"
+                                } else {
+                                    "View only on web — Google Sign-In required to edit"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                        Switch(
+                            checked = board.isPublicEditable,
+                            onCheckedChange = onTogglePublicEditable,
+                            modifier = Modifier.testTag("toggle_public_editable_switch")
+                        )
+                    }
+                }
+
+                if (onSetAsPublicDefault != null) {
+                    OutlinedButton(
+                        onClick = onSetAsPublicDefault,
+                        modifier = Modifier.fillMaxWidth().testTag("set_public_default_button")
+                    ) {
+                        Text("Use \"${board.title}\" for Main Public Link")
                     }
                 }
 
@@ -188,6 +233,13 @@ fun ShareLinkReadyDialog(
                     Spacer(Modifier.width(8.dp))
                     Text("Share Link via Apps")
                 }
+
+                TextButton(
+                    onClick = { ShareUtils.copyToClipboard(context, "Board Direct Link", boardSpecificUrl) },
+                    modifier = Modifier.fillMaxWidth().testTag("copy_share_code_button")
+                ) {
+                    Text("Copy Board-Specific URL (${board.shareCode})")
+                }
             }
         },
         confirmButton = {
@@ -201,17 +253,17 @@ fun ShareLinkReadyDialog(
         var hostInput by remember { mutableStateOf(baseUrl) }
         AlertDialog(
             onDismissRequest = { showEditHostDialog = false },
-            title = { Text("Set Custom Live Web URL") },
+            title = { Text("Set Your Live Website URL") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Hosted the web/ folder on Netlify Drop, GitHub Pages, or Vercel? Paste its site URL below (leave blank to reset to default).",
+                        text = "Paste your GitHub Pages URL (e.g. https://nandwanifamily242l-hash.github.io/your-repo) so the Copy & Share buttons always use your live link.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
                         value = hostInput,
                         onValueChange = { hostInput = it },
-                        label = { Text("Site URL (e.g. https://my-shopkeep.netlify.app)") },
+                        label = { Text("GitHub Pages / Web URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("custom_web_host_input")
                     )

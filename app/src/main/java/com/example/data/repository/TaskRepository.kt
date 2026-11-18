@@ -27,6 +27,8 @@ class TaskRepository(
 ) {
 
     companion object {
+        const val PUBLIC_DEFAULT_BOARD_ID = "PUBLIC_DEFAULT"
+
         fun create(context: Context): TaskRepository {
             val databaseId = context.getString(R.string.firestore_database_id)
             return TaskRepository(
@@ -434,6 +436,8 @@ class TaskRepository(
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
                     doc.toObject(SharedChecklist::class.java)?.copy(id = doc.id)
+                }?.filter {
+                    it.id != PUBLIC_DEFAULT_BOARD_ID && it.shareCode != PUBLIC_DEFAULT_BOARD_ID
                 }?.sortedByDescending { it.updatedAt } ?: emptyList()
                 trySend(list)
             }
@@ -484,22 +488,149 @@ class TaskRepository(
 
     suspend fun createSharedChecklist(
         title: String,
-        initialCategories: List<String> = listOf("Beverages", "Dairy & Cold", "Snacks", "Supplies")
+        initialCategories: List<String> = listOf("Beverages", "Dairy & Cold", "Snacks", "Supplies"),
+        isPublicEditable: Boolean = true
     ): Result<String> = runCatching {
         val user = auth.currentUser ?: throw IllegalStateException("Not authenticated")
         val code = "SHOP-" + UUID.randomUUID().toString().take(6).uppercase()
         val now = System.currentTimeMillis()
+        val cleanTitle = title.trim().ifBlank { "Shared Shop List" }
         val payload = mapOf(
             "shareCode" to code,
-            "title" to title.trim().ifBlank { "Shared Shop List" },
+            "title" to cleanTitle,
             "ownerId" to user.uid,
             "ownerName" to (user.displayName ?: "Shop Owner"),
             "memberIds" to listOf(user.uid),
             "categories" to initialCategories,
+            "isPublicEditable" to isPublicEditable,
             "createdAt" to now,
             "updatedAt" to now
         )
         sharedChecklistsCol().document(code).set(payload).await()
+        setPublicDefaultBoard(code, cleanTitle, isPublicEditable).getOrThrow()
+        code
+    }
+
+    suspend fun setPublicDefaultBoard(
+        shareCode: String,
+        title: String,
+        isPublicEditable: Boolean = true
+    ): Result<Unit> = runCatching {
+        val user = auth.currentUser ?: throw IllegalStateException("Not authenticated")
+        val code = shareCode.trim().uppercase()
+        require(code.isNotBlank()) { "Share code cannot be blank" }
+        val now = System.currentTimeMillis()
+        val pointerRef = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID)
+        val existingSnap = pointerRef.get().await()
+        if (existingSnap.exists()) {
+            pointerRef.update(
+                mapOf(
+                    "activeShareCode" to code,
+                    "title" to title.trim().ifBlank { "Shop Stock Checklist" },
+                    "isPublicEditable" to isPublicEditable,
+                    "updatedAt" to now
+                )
+            ).await()
+        } else {
+            val payload = mapOf(
+                "shareCode" to PUBLIC_DEFAULT_BOARD_ID,
+                "activeShareCode" to code,
+                "title" to title.trim().ifBlank { "Shop Stock Checklist" },
+                "ownerId" to user.uid,
+                "ownerName" to (user.displayName ?: "Shop Owner"),
+                "memberIds" to listOf(user.uid),
+                "isPublicEditable" to isPublicEditable,
+                "createdAt" to now,
+                "updatedAt" to now
+            )
+            pointerRef.set(payload).await()
+        }
+    }
+
+    suspend fun setSharedBoardPublicEditable(
+        shareCode: String,
+        isPublicEditable: Boolean
+    ): Result<Unit> = runCatching {
+        requireUid()
+        val code = shareCode.trim().uppercase()
+        val now = System.currentTimeMillis()
+        sharedChecklistsCol().document(code).update(
+            mapOf("isPublicEditable" to isPublicEditable, "updatedAt" to now)
+        ).await()
+        val pointerRef = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID)
+        val pointerSnap = pointerRef.get().await()
+        if (pointerSnap.exists() && pointerSnap.getString("activeShareCode") == code) {
+            pointerRef.update(
+                mapOf("isPublicEditable" to isPublicEditable, "updatedAt" to now)
+            ).await()
+        }
+    }
+
+    suspend fun publishPersonalChecklistToPublicBoard(
+        items: List<ChecklistItem>,
+        title: String = "Shop Stock Checklist"
+    ): Result<String> = runCatching {
+        val user = auth.currentUser ?: throw IllegalStateException("Not authenticated")
+        val uidSlug = user.uid.replace(Regex("[^A-Za-z0-9]"), "").take(6).uppercase().ifBlank { "PUBLIC" }
+        val code = "SHOP-$uidSlug"
+        val now = System.currentTimeMillis()
+        val cleanTitle = title.trim().ifBlank { "Shop Stock Checklist" }
+        val activeItems = items.filter { !it.isDeleted }
+        val categories = (activeItems.map { it.category.trim() }.filter { it.isNotBlank() } +
+            listOf("Beverages", "Dairy & Cold", "Snacks", "Supplies")).distinct()
+
+        val boardRef = sharedChecklistsCol().document(code)
+        val existingBoard = boardRef.get().await()
+        if (existingBoard.exists()) {
+            boardRef.update(
+                mapOf(
+                    "title" to cleanTitle,
+                    "categories" to categories,
+                    "isPublicEditable" to true,
+                    "updatedAt" to now
+                )
+            ).await()
+        } else {
+            val payload = mapOf(
+                "shareCode" to code,
+                "title" to cleanTitle,
+                "ownerId" to user.uid,
+                "ownerName" to (user.displayName ?: "Shop Owner"),
+                "memberIds" to listOf(user.uid),
+                "categories" to categories,
+                "isPublicEditable" to true,
+                "createdAt" to now,
+                "updatedAt" to now
+            )
+            boardRef.set(payload).await()
+        }
+
+        if (activeItems.isNotEmpty()) {
+            activeItems.chunked(400).forEach { chunk ->
+                val batch = firestore.batch()
+                chunk.forEach { item ->
+                    val itemId = item.id.ifBlank { UUID.randomUUID().toString() }
+                    val itemRef = boardRef.collection("items").document(itemId)
+                    batch.set(
+                        itemRef,
+                        mapOf(
+                            "title" to item.title.trim().ifBlank { "Stock Item" },
+                            "quantity" to item.quantity.trim(),
+                            "category" to item.category.trim().ifBlank { "General Stock" },
+                            "notes" to item.notes.trim(),
+                            "isChecked" to item.isChecked,
+                            "addedByUid" to user.uid,
+                            "addedByName" to (user.displayName ?: "Shop Owner"),
+                            "createdAt" to item.createdAt,
+                            "updatedAt" to now
+                        )
+                    )
+                }
+                batch.commit().await()
+            }
+        }
+
+        setPublicDefaultBoard(code, cleanTitle, isPublicEditable = true).getOrThrow()
         code
     }
 
