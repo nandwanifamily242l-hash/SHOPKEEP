@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShopKeep Live Checklist</title>
+  <link rel="stylesheet" href="web/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">SK</div>
+      <div>
+        <h1>ShopKeep Live</h1>
+        <p class="subtitle">Real-time synced shop checklist — no app download required</p>
+      </div>
+    </div>
+    <div class="auth-controls">
+      <span id="userLabel" class="user-label">View Mode</span>
+      <button id="signInBtn" class="btn btn-primary">Sign in with Google to Edit</button>
+      <button id="signOutBtn" class="btn btn-outline hidden">Sign out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="join-bar card">
+      <input id="codeInput" type="text" placeholder="Enter Share Code (e.g. SHOP-A1B2C3)" />
+      <button id="openCodeBtn" class="btn btn-primary">Open Live Board</button>
+    </section>
+
+    <section id="boardSection" class="card hidden">
+      <div class="board-header">
+        <div>
+          <h2 id="boardTitle">Shared Checklist</h2>
+          <p id="boardMeta" class="subtitle"></p>
+        </div>
+        <span id="liveBadge" class="badge-live">LIVE SYNC</span>
+      </div>
+
+      <form id="addItemForm" class="add-item-form hidden">
+        <input id="itemTitleInput" type="text" placeholder="Add stock item..." required />
+        <input id="itemQtyInput" type="text" placeholder="Qty (e.g. 2 crates)" />
+        <input id="itemCatInput" type="text" placeholder="Category" value="Supplies" />
+        <button type="submit" class="btn btn-primary">Add</button>
+      </form>
+
+      <div id="categoriesContainer" class="categories-grid"></div>
+    </section>
+
+    <section id="emptyState" class="card empty-state">
+      <h2>Open a ShopKeep Live Checklist</h2>
+      <p>Paste a share code above or open a shared URL (<code>?checklist=SHOP-XXXXXX</code>) from your ShopKeep Android app to see real-time updates across devices.</p>
+    </section>
+  </main>
+
+  <script type="module" src="web/app.js"></script>
+</body>
+</html>
