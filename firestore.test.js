@@ -76,7 +76,7 @@ test("Authenticated user cannot read or write another user's checklist items or 
   await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("photos").doc("p1").get());
 });
 
-test("Public editable shared board allows open link access and toggling without login, while restricted board denies unauth writes", async () => {
+test("Public shared board allows viewing and marking/unmarking without login, while blocking public create/delete/title edits", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const unauthDb = testEnv.unauthenticatedContext().firestore();
 
@@ -94,27 +94,66 @@ test("Public editable shared board allows open link access and toggling without 
     })
   );
 
-  // Unauthenticated visitor can read and edit when isPublicEditable is true
-  await assertSucceeds(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").get());
+  // Owner adds stock item
   await assertSucceeds(
-    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").set({
+    aliceDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").set({
       title: "Orange Juice",
       quantity: "3 packs",
       category: "Beverages",
       notes: "",
       isChecked: false,
-      addedByUid: "public",
-      addedByName: "Public Link",
+      imageBase64: "",
+      addedByUid: ALICE_UID,
+      addedByName: "Alice",
       createdAt: 3010,
       updatedAt: 3010,
     })
+  );
+
+  // Unauthenticated visitor CAN view and mark/unmark (isChecked + updatedAt only)
+  await assertSucceeds(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").get());
+  await assertSucceeds(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").update({
+      isChecked: true,
+      updatedAt: 3015,
+    })
+  );
+  await assertSucceeds(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").update({
+      isChecked: false,
+      updatedAt: 3016,
+    })
+  );
+
+  // Unauthenticated visitor CANNOT create new stock items, overwrite titles, or delete items
+  await assertFails(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i2").set({
+      title: "Public Visitor Stock",
+      quantity: "1",
+      category: "Beverages",
+      notes: "",
+      isChecked: false,
+      addedByUid: "public",
+      createdAt: 3017,
+      updatedAt: 3017,
+    })
+  );
+  await assertFails(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").update({
+      title: "Tampered Title",
+      isChecked: true,
+      updatedAt: 3018,
+    })
+  );
+  await assertFails(
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").delete()
   );
 
   // Unauthenticated visitor still CANNOT list all boards or delete board
   await assertFails(unauthDb.collection("shared_checklists").get());
   await assertFails(unauthDb.collection("shared_checklists").doc("SHOP-PUB1").delete());
 
-  // Owner puts restrictions on later
+  // Owner restricts board later (strictly view-only)
   await assertSucceeds(
     aliceDb.collection("shared_checklists").doc("SHOP-PUB1").update({
       isPublicEditable: false,
@@ -122,16 +161,10 @@ test("Public editable shared board allows open link access and toggling without 
     })
   );
 
-  // Now unauthenticated writes are rejected, while reads still work
+  // Now even mark/unmark without login is rejected, while reads still work
   await assertFails(
-    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i2").set({
-      title: "Blocked Item",
-      quantity: "1",
-      category: "Snacks",
-      notes: "",
-      isChecked: false,
-      addedByUid: "public",
-      createdAt: 3030,
+    unauthDb.collection("shared_checklists").doc("SHOP-PUB1").collection("items").doc("i1").update({
+      isChecked: true,
       updatedAt: 3030,
     })
   );

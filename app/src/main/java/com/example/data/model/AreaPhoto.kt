@@ -1,7 +1,11 @@
 package com.example.data.model
 
+import androidx.annotation.Keep
 import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.IgnoreExtraProperties
 
+@Keep
+@IgnoreExtraProperties
 data class AreaPhoto(
     @DocumentId val id: String = "",
     val title: String = "",

@@ -34,6 +34,7 @@ data class SharedChecklistItem(
     @get:PropertyName("isChecked")
     @PropertyName("isChecked")
     val isChecked: Boolean = false,
+    val imageBase64: String = "",
     val addedByUid: String = "",
     val addedByName: String = "",
     val createdAt: Long = System.currentTimeMillis(),

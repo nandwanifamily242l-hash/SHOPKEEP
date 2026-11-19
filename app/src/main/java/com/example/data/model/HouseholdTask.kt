@@ -1,6 +1,9 @@
 package com.example.data.model
 
+import androidx.annotation.Keep
 import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 
 enum class TaskPriority(val label: String, val quadrantTitle: String) {
     URGENT_IMPORTANT("Urgent & Important", "Do First"),
@@ -14,6 +17,8 @@ enum class TaskPriority(val label: String, val quadrantTitle: String) {
     }
 }
 
+@Keep
+@IgnoreExtraProperties
 data class HouseholdTask(
     @DocumentId val id: String = "",
     val title: String = "",
@@ -21,7 +26,11 @@ data class HouseholdTask(
     val category: String = "Restock",
     val areaId: String = "",
     val priority: String = TaskPriority.NOT_URGENT_IMPORTANT.name,
+    @get:PropertyName("isCompleted")
+    @PropertyName("isCompleted")
     val isCompleted: Boolean = false,
+    @get:PropertyName("isDeleted")
+    @PropertyName("isDeleted")
     val isDeleted: Boolean = false,
     val dueDateMillis: Long? = null,
     val reminderTimeMillis: Long? = null,

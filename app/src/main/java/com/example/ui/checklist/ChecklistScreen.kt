@@ -1,5 +1,11 @@
 package com.example.ui.checklist
 
+import android.graphics.Bitmap
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddAPhoto
+import androidx.compose.material.icons.rounded.CropRotate
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
@@ -54,9 +62,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +77,8 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.ChecklistItem
 import com.example.data.model.ChecklistSortOption
 import com.example.data.model.SharedChecklistItem
+import com.example.ui.components.ImageEditorDialog
+import com.example.ui.components.ImageUtils
 import com.example.ui.components.ShareLinkReadyDialog
 import com.example.ui.components.ShareUtils
 import com.example.viewmodel.ShopKeepUiState
@@ -76,13 +90,24 @@ fun ChecklistScreen(
     viewModel: TaskViewModel
 ) {
     val context = LocalContext.current
-    var selectedSubTab by remember { mutableIntStateOf(0) } // 0 = My Stock, 1 = Shared Live
+    var selectedSubTab by rememberSaveable { mutableIntStateOf(0) } // 0 = My Stock, 1 = Shared Live
     var searchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
 
     var showAddPersonalItemDialog by remember { mutableStateOf(false) }
     var editingPersonalItem by remember { mutableStateOf<ChecklistItem?>(null) }
     var preselectedCategory by remember { mutableStateOf("General Stock") }
+
+    var draftPersonalPhotoBase64 by remember { mutableStateOf("") }
+    var draftSharedPhotoBase64 by remember { mutableStateOf("") }
+    var editorTargetBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var editorForShared by remember { mutableStateOf(false) }
+    var editorDirectSavePersonal by remember { mutableStateOf<ChecklistItem?>(null) }
+    var editorDirectSaveShared by remember { mutableStateOf<SharedChecklistItem?>(null) }
+
+    var previewPersonalPhotoItem by remember { mutableStateOf<ChecklistItem?>(null) }
+    var previewSharedPhotoItem by remember { mutableStateOf<SharedChecklistItem?>(null) }
+    var editingSharedItem by remember { mutableStateOf<SharedChecklistItem?>(null) }
 
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var renamingCategoryTarget by remember { mutableStateOf<Pair<String, Boolean>?>(null) } // name to isShared
@@ -100,14 +125,50 @@ fun ChecklistScreen(
         viewModel.visibleChecklistCategories()
     }
 
+    var pickForSharedBoard by rememberSaveable { mutableStateOf(false) }
+    val checklistPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            val bmp = ImageUtils.decodeBitmapFromUri(context, uri, maxDimension = 1024)
+            if (bmp != null) {
+                val encoded = ImageUtils.encodeToBase64(bmp, maxWidth = 720, quality = 74)
+                if (pickForSharedBoard) {
+                    draftSharedPhotoBase64 = encoded
+                    if (!showAddSharedItemDialog && uiState.activeSharedBoard != null) {
+                        editingSharedItem = null
+                        showAddSharedItemDialog = true
+                    }
+                } else {
+                    draftPersonalPhotoBase64 = encoded
+                    if (!showAddPersonalItemDialog) {
+                        editingPersonalItem = null
+                        preselectedCategory = sortedCategories.firstOrNull() ?: "General Stock"
+                        showAddPersonalItemDialog = true
+                    }
+                }
+            } else {
+                Toast.makeText(context, "Could not load selected photo", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val activePersonalItems = remember(uiState.checklistItems, searchQuery) {
         uiState.checklistItems
             .filter { !it.isDeleted }
             .filter {
                 searchQuery.isBlank() ||
                     it.title.contains(searchQuery, ignoreCase = true) ||
-                    it.category.contains(searchQuery, ignoreCase = true)
+                    it.category.contains(searchQuery, ignoreCase = true) ||
+                    it.notes.contains(searchQuery, ignoreCase = true)
             }
+    }
+
+    val selectedPersonalPhotoCount = remember(activePersonalItems) {
+        activePersonalItems.count { it.imageBase64.isNotBlank() && it.isChecked }
+    }
+    val selectedSharedPhotoCount = remember(uiState.activeSharedItems) {
+        uiState.activeSharedItems.count { it.imageBase64.isNotBlank() && it.isChecked }
     }
 
     Scaffold(
@@ -116,9 +177,12 @@ fun ChecklistScreen(
                 onClick = {
                     if (selectedSubTab == 0) {
                         editingPersonalItem = null
+                        draftPersonalPhotoBase64 = ""
                         preselectedCategory = sortedCategories.firstOrNull() ?: "General Stock"
                         showAddPersonalItemDialog = true
                     } else if (uiState.activeSharedBoard != null) {
+                        editingSharedItem = null
+                        draftSharedPhotoBase64 = ""
                         showAddSharedItemDialog = true
                     } else {
                         showCreateBoardDialog = true
@@ -222,18 +286,65 @@ fun ChecklistScreen(
                         }
                     }
 
-                    Button(
-                        onClick = {
-                            viewModel.publishPersonalListToPublicBoard {
-                                selectedSubTab = 1
-                                showShareDialog = true
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("publish_public_link_button")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Publish & Share Public Live Link (No Code)")
+                        OutlinedButton(
+                            onClick = {
+                                pickForSharedBoard = false
+                                checklistPhotoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.weight(1f).testTag("add_photo_note_button")
+                        ) {
+                            Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("+ Photo Note")
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.publishPersonalListToPublicBoard {
+                                    selectedSubTab = 1
+                                    showShareDialog = true
+                                }
+                            },
+                            modifier = Modifier.weight(1f).testTag("publish_public_link_button")
+                        ) {
+                            Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Public Link")
+                        }
+                    }
+
+                    if (selectedPersonalPhotoCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "$selectedPersonalPhotoCount photo note(s) selected",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                TextButton(
+                                    onClick = { viewModel.unselectAllChecklistPhotos() },
+                                    modifier = Modifier.testTag("unselect_all_photos_button")
+                                ) {
+                                    Text("Unselect All")
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -281,6 +392,7 @@ fun ChecklistScreen(
                                         IconButton(
                                             onClick = {
                                                 editingPersonalItem = null
+                                                draftPersonalPhotoBase64 = ""
                                                 preselectedCategory = category
                                                 showAddPersonalItemDialog = true
                                             }
@@ -292,49 +404,91 @@ fun ChecklistScreen(
 
                                 if (catItems.isEmpty()) {
                                     Text(
-                                        text = "No items yet. Tap + to add stock to $category.",
+                                        text = "No items yet. Tap + or + Photo Note to add to $category.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(top = 6.dp)
                                     )
                                 } else {
-                                    Spacer(Modifier.height(6.dp))
-                                    catItems.forEach { item ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    editingPersonalItem = item
-                                                    preselectedCategory = item.category
-                                                    showAddPersonalItemDialog = true
-                                                }
-                                                .padding(vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Checkbox(
-                                                checked = item.isChecked,
-                                                onCheckedChange = { viewModel.toggleChecklistItem(item) }
-                                            )
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = item.title,
-                                                    textDecoration = if (item.isChecked) TextDecoration.LineThrough else null,
-                                                    fontWeight = FontWeight.Medium
-                                                )
-                                                if (item.quantity.isNotBlank() || item.notes.isNotBlank()) {
-                                                    Text(
-                                                        text = listOf(item.quantity, item.notes).filter { it.isNotBlank() }.joinToString(" • "),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
+                                    val photoItems = catItems.filter { it.imageBase64.isNotBlank() }
+                                    val textItems = catItems.filter { it.imageBase64.isBlank() }
+
+                                    if (photoItems.isNotEmpty()) {
+                                        Spacer(Modifier.height(8.dp))
+                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            photoItems.chunked(2).forEach { pair ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    pair.forEach { photoItem ->
+                                                        ChecklistPhotoNoteCard(
+                                                            itemId = photoItem.id,
+                                                            title = photoItem.title,
+                                                            quantity = photoItem.quantity,
+                                                            notes = photoItem.notes,
+                                                            isSelected = photoItem.isChecked,
+                                                            imageBase64 = photoItem.imageBase64,
+                                                            onToggleSelect = { viewModel.toggleChecklistItem(photoItem) },
+                                                            onPreviewPhoto = { previewPersonalPhotoItem = photoItem },
+                                                            onEdit = {
+                                                                editingPersonalItem = photoItem
+                                                                draftPersonalPhotoBase64 = photoItem.imageBase64
+                                                                preselectedCategory = photoItem.category
+                                                                showAddPersonalItemDialog = true
+                                                            },
+                                                            onDelete = { viewModel.deleteChecklistItem(photoItem.id, permanent = false) },
+                                                            modifier = Modifier.weight(1f)
+                                                        )
+                                                    }
+                                                    if (pair.size == 1) {
+                                                        Spacer(Modifier.weight(1f))
+                                                    }
                                                 }
                                             }
-                                            IconButton(onClick = { viewModel.deleteChecklistItem(item.id, permanent = false) }) {
-                                                Icon(
-                                                    Icons.Rounded.Delete,
-                                                    contentDescription = "Move to recycle bin",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    }
+
+                                    if (textItems.isNotEmpty()) {
+                                        Spacer(Modifier.height(6.dp))
+                                        textItems.forEach { item ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        editingPersonalItem = item
+                                                        draftPersonalPhotoBase64 = item.imageBase64
+                                                        preselectedCategory = item.category
+                                                        showAddPersonalItemDialog = true
+                                                    }
+                                                    .padding(vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Checkbox(
+                                                    checked = item.isChecked,
+                                                    onCheckedChange = { viewModel.toggleChecklistItem(item) }
                                                 )
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = item.title,
+                                                        textDecoration = if (item.isChecked) TextDecoration.LineThrough else null,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                    if (item.quantity.isNotBlank() || item.notes.isNotBlank()) {
+                                                        Text(
+                                                            text = listOf(item.quantity, item.notes).filter { it.isNotBlank() }.joinToString(" • "),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                                IconButton(onClick = { viewModel.deleteChecklistItem(item.id, permanent = false) }) {
+                                                    Icon(
+                                                        Icons.Rounded.Delete,
+                                                        contentDescription = "Move to recycle bin",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -428,9 +582,9 @@ fun ChecklistScreen(
                                         Text(activeBoard.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                         Text(
                                             text = if (activeBoard.isPublicEditable) {
-                                                "Public Open Access • Anyone can open & edit"
+                                                "Public Link • View & Mark/Unmark only"
                                             } else {
-                                                "Restricted Edit • Google Sign-In required"
+                                                "Restricted • Strictly view-only in public"
                                             },
                                             style = MaterialTheme.typography.bodySmall
                                         )
@@ -444,12 +598,54 @@ fun ChecklistScreen(
                                         Text("Public Link")
                                     }
                                 }
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        pickForSharedBoard = true
+                                        checklistPhotoPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxWidth().testTag("add_shared_photo_note_button")
+                                ) {
+                                    Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("+ Add Photo Note to Live Board")
+                                }
+                            }
+                        }
+
+                        if (selectedSharedPhotoCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "$selectedSharedPhotoCount photo note(s) selected",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    TextButton(onClick = { viewModel.unselectAllSharedPhotos() }) {
+                                        Text("Unselect All")
+                                    }
+                                }
                             }
                         }
 
                         val sharedCategories = remember(activeBoard.categories, uiState.activeSharedItems) {
                             (activeBoard.categories + uiState.activeSharedItems.map { it.category })
-                                .distinct()
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .distinctBy { it.lowercase() }
                                 .sortedBy { it.lowercase() }
                         }
 
@@ -486,7 +682,46 @@ fun ChecklistScreen(
                                                 Icon(Icons.Rounded.Edit, contentDescription = "Rename shared category")
                                             }
                                         }
-                                        itemsInCat.forEach { item ->
+
+                                        val sharedPhotoItems = itemsInCat.filter { it.imageBase64.isNotBlank() }
+                                        val sharedTextItems = itemsInCat.filter { it.imageBase64.isBlank() }
+
+                                        if (sharedPhotoItems.isNotEmpty()) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                sharedPhotoItems.chunked(2).forEach { pair ->
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                    ) {
+                                                        pair.forEach { photoItem ->
+                                                            ChecklistPhotoNoteCard(
+                                                                itemId = photoItem.id,
+                                                                title = photoItem.title,
+                                                                quantity = photoItem.quantity,
+                                                                notes = photoItem.notes,
+                                                                isSelected = photoItem.isChecked,
+                                                                imageBase64 = photoItem.imageBase64,
+                                                                onToggleSelect = { viewModel.toggleSharedItem(photoItem) },
+                                                                onPreviewPhoto = { previewSharedPhotoItem = photoItem },
+                                                                onEdit = {
+                                                                    editingSharedItem = photoItem
+                                                                    draftSharedPhotoBase64 = photoItem.imageBase64
+                                                                    showAddSharedItemDialog = true
+                                                                },
+                                                                onDelete = { viewModel.deleteSharedItem(photoItem.id) },
+                                                                modifier = Modifier.weight(1f)
+                                                            )
+                                                        }
+                                                        if (pair.size == 1) {
+                                                            Spacer(Modifier.weight(1f))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        sharedTextItems.forEach { item ->
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 verticalAlignment = Alignment.CenterVertically
@@ -520,19 +755,81 @@ fun ChecklistScreen(
     }
 
     if (showAddPersonalItemDialog) {
-        var title by remember { mutableStateOf(editingPersonalItem?.title ?: "") }
-        var qty by remember { mutableStateOf(editingPersonalItem?.quantity ?: "") }
-        var category by remember { mutableStateOf(preselectedCategory) }
-        var notes by remember { mutableStateOf(editingPersonalItem?.notes ?: "") }
+        var title by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.title ?: "") }
+        var qty by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.quantity ?: "") }
+        var category by remember(editingPersonalItem?.id, preselectedCategory) { mutableStateOf(preselectedCategory) }
+        var notes by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.notes ?: "") }
+        val draftBitmap = remember(draftPersonalPhotoBase64) {
+            ImageUtils.decodeBitmapFromBase64(draftPersonalPhotoBase64)
+        }
         AlertDialog(
             onDismissRequest = { showAddPersonalItemDialog = false },
-            title = { Text(if (editingPersonalItem == null) "Add Stock Item" else "Edit Stock Item") },
+            title = {
+                Text(
+                    when {
+                        editingPersonalItem != null -> "Edit Stock Item"
+                        draftPersonalPhotoBase64.isNotBlank() -> "Add Photo Note"
+                        else -> "Add Stock Item"
+                    }
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (draftBitmap != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(130.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        ) {
+                            Image(
+                                bitmap = draftBitmap.asImageBitmap(),
+                                contentDescription = "Attached checklist photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    editorForShared = false
+                                    editorDirectSavePersonal = null
+                                    editorTargetBitmap = draftBitmap
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.CropRotate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Crop / Edit")
+                            }
+                            TextButton(onClick = { draftPersonalPhotoBase64 = "" }) {
+                                Text("Remove")
+                            }
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = {
+                                pickForSharedBoard = false
+                                checklistPhotoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("attach_checklist_photo_button")
+                        ) {
+                            Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Attach Photo Note")
+                        }
+                    }
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Item Name") },
+                        label = {
+                            Text(if (draftBitmap != null) "Photo Title / Label (optional)" else "Item Name")
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("checklist_item_title_input")
                     )
@@ -561,14 +858,17 @@ fun ChecklistScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (title.isNotBlank()) {
+                        val effectiveTitle = title.ifBlank { if (draftBitmap != null) "Photo Note" else "" }
+                        if (effectiveTitle.isNotBlank()) {
                             viewModel.saveChecklistItem(
                                 id = editingPersonalItem?.id ?: "",
-                                title = title,
+                                title = effectiveTitle,
                                 quantity = qty,
                                 category = category,
-                                notes = notes
+                                notes = notes,
+                                imageBase64 = draftPersonalPhotoBase64
                             )
+                            draftPersonalPhotoBase64 = ""
                             showAddPersonalItemDialog = false
                         }
                     },
@@ -705,18 +1005,81 @@ fun ChecklistScreen(
 
     if (showAddSharedItemDialog) {
         val board = uiState.activeSharedBoard
-        var title by remember { mutableStateOf("") }
-        var qty by remember { mutableStateOf("") }
-        var category by remember { mutableStateOf(board?.categories?.firstOrNull() ?: "Supplies") }
+        var title by remember(editingSharedItem?.id) { mutableStateOf(editingSharedItem?.title ?: "") }
+        var qty by remember(editingSharedItem?.id) { mutableStateOf(editingSharedItem?.quantity ?: "") }
+        var category by remember(editingSharedItem?.id, board?.shareCode) {
+            mutableStateOf(editingSharedItem?.category ?: board?.categories?.firstOrNull() ?: "Supplies")
+        }
+        var notes by remember(editingSharedItem?.id) { mutableStateOf(editingSharedItem?.notes ?: "") }
+        val draftBitmap = remember(draftSharedPhotoBase64) {
+            ImageUtils.decodeBitmapFromBase64(draftSharedPhotoBase64)
+        }
         AlertDialog(
             onDismissRequest = { showAddSharedItemDialog = false },
-            title = { Text("Add to Shared Board") },
+            title = {
+                Text(
+                    when {
+                        editingSharedItem != null -> "Edit Shared Item"
+                        draftBitmap != null -> "Add Photo Note to Board"
+                        else -> "Add to Shared Board"
+                    }
+                )
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (draftBitmap != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(130.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                        ) {
+                            Image(
+                                bitmap = draftBitmap.asImageBitmap(),
+                                contentDescription = "Attached shared checklist photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    editorForShared = true
+                                    editorDirectSaveShared = null
+                                    editorTargetBitmap = draftBitmap
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.CropRotate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Crop / Edit")
+                            }
+                            TextButton(onClick = { draftSharedPhotoBase64 = "" }) {
+                                Text("Remove")
+                            }
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = {
+                                pickForSharedBoard = true
+                                checklistPhotoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Attach Photo Note")
+                        }
+                    }
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Item Name") },
+                        label = { Text(if (draftBitmap != null) "Photo Title (optional)" else "Item Name") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -734,18 +1097,124 @@ fun ChecklistScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        label = { Text("Notes (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    if (title.isNotBlank()) {
-                        viewModel.saveSharedItem(title = title, quantity = qty, category = category)
+                    val effectiveTitle = title.ifBlank { if (draftBitmap != null) "Photo Note" else "" }
+                    if (effectiveTitle.isNotBlank()) {
+                        viewModel.saveSharedItem(
+                            id = editingSharedItem?.id ?: "",
+                            title = effectiveTitle,
+                            quantity = qty,
+                            category = category,
+                            notes = notes,
+                            imageBase64 = draftSharedPhotoBase64
+                        )
+                        draftSharedPhotoBase64 = ""
+                        editingSharedItem = null
                         showAddSharedItemDialog = false
                     }
-                }) { Text("Add Item") }
+                }) { Text(if (editingSharedItem != null) "Save" else "Add Item") }
             },
             dismissButton = {
                 TextButton(onClick = { showAddSharedItemDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    previewPersonalPhotoItem?.let { item ->
+        val latest = uiState.checklistItems.firstOrNull { it.id == item.id } ?: item
+        val bmp = remember(latest.imageBase64) { ImageUtils.decodeBitmapFromBase64(latest.imageBase64) }
+        if (bmp != null) {
+            ChecklistPhotoNotePreviewDialog(
+                title = latest.title,
+                quantity = latest.quantity,
+                notes = latest.notes,
+                isSelected = latest.isChecked,
+                bitmap = bmp,
+                onToggleSelect = { viewModel.toggleChecklistItem(latest) },
+                onOpenEditor = {
+                    editorForShared = false
+                    editorDirectSavePersonal = latest
+                    editorTargetBitmap = bmp
+                    previewPersonalPhotoItem = null
+                },
+                onDismiss = { previewPersonalPhotoItem = null }
+            )
+        } else {
+            previewPersonalPhotoItem = null
+        }
+    }
+
+    previewSharedPhotoItem?.let { item ->
+        val latest = uiState.activeSharedItems.firstOrNull { it.id == item.id } ?: item
+        val bmp = remember(latest.imageBase64) { ImageUtils.decodeBitmapFromBase64(latest.imageBase64) }
+        if (bmp != null) {
+            ChecklistPhotoNotePreviewDialog(
+                title = latest.title,
+                quantity = latest.quantity,
+                notes = latest.notes,
+                isSelected = latest.isChecked,
+                bitmap = bmp,
+                onToggleSelect = { viewModel.toggleSharedItem(latest) },
+                onOpenEditor = {
+                    editorForShared = true
+                    editorDirectSaveShared = latest
+                    editorTargetBitmap = bmp
+                    previewSharedPhotoItem = null
+                },
+                onDismiss = { previewSharedPhotoItem = null }
+            )
+        } else {
+            previewSharedPhotoItem = null
+        }
+    }
+
+    editorTargetBitmap?.let { bmp ->
+        ImageEditorDialog(
+            sourceBitmap = bmp,
+            onDismiss = {
+                editorTargetBitmap = null
+                editorDirectSavePersonal = null
+                editorDirectSaveShared = null
+            },
+            onApply = { edited ->
+                val encoded = ImageUtils.encodeToBase64(edited, maxWidth = 720, quality = 74)
+                val directPersonal = editorDirectSavePersonal
+                val directShared = editorDirectSaveShared
+                if (directPersonal != null) {
+                    viewModel.saveChecklistItem(
+                        id = directPersonal.id,
+                        title = directPersonal.title,
+                        quantity = directPersonal.quantity,
+                        category = directPersonal.category,
+                        notes = directPersonal.notes,
+                        imageBase64 = encoded
+                    )
+                } else if (directShared != null) {
+                    viewModel.saveSharedItem(
+                        id = directShared.id,
+                        title = directShared.title,
+                        quantity = directShared.quantity,
+                        category = directShared.category,
+                        notes = directShared.notes,
+                        imageBase64 = encoded
+                    )
+                } else if (editorForShared) {
+                    draftSharedPhotoBase64 = encoded
+                } else {
+                    draftPersonalPhotoBase64 = encoded
+                }
+                editorTargetBitmap = null
+                editorDirectSavePersonal = null
+                editorDirectSaveShared = null
             }
         )
     }

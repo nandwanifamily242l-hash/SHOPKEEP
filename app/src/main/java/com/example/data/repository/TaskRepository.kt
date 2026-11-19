@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.util.Log
 import com.example.R
 import com.example.data.model.AreaPhoto
 import com.example.data.model.ChecklistCategory
@@ -11,6 +12,7 @@ import com.example.data.model.HouseholdTask
 import com.example.data.model.SharedChecklist
 import com.example.data.model.SharedChecklistItem
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -21,10 +23,19 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
+private const val REPO_TAG = "ShopKeepRepo"
+
 class TaskRepository(
     private val firestore: FirebaseFirestore,
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
+
+    private inline fun <reified T : Any> DocumentSnapshot.toObjectSafe(): T? =
+        runCatching { toObject(T::class.java) }
+            .onFailure { e ->
+                Log.e(REPO_TAG, "Skipping malformed ${T::class.java.simpleName} doc id=$id", e)
+            }
+            .getOrNull()
 
     companion object {
         const val PUBLIC_DEFAULT_BOARD_ID = "PUBLIC_DEFAULT"
@@ -78,7 +89,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(HouseholdTask::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<HouseholdTask>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -112,7 +123,7 @@ class TaskRepository(
     suspend fun getTaskById(taskId: String): Result<HouseholdTask?> = runCatching {
         val uid = requireUid()
         val snap = tasksCol(uid).document(taskId).get().await()
-        snap.toObject(HouseholdTask::class.java)?.copy(id = snap.id)
+        snap.toObjectSafe<HouseholdTask>()?.copy(id = snap.id)
     }
 
     suspend fun deleteTask(taskId: String, permanent: Boolean = false): Result<Unit> = runCatching {
@@ -148,7 +159,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(HouseArea::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<HouseArea>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -189,7 +200,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(HouseholdHabit::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<HouseholdHabit>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -232,7 +243,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(AreaPhoto::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<AreaPhoto>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -291,7 +302,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(ChecklistItem::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<ChecklistItem>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -303,12 +314,13 @@ class TaskRepository(
         val id = item.id.ifBlank { UUID.randomUUID().toString() }
         val now = System.currentTimeMillis()
         val payload = mapOf(
-            "title" to item.title.trim(),
+            "title" to item.title.trim().ifBlank { if (item.imageBase64.isNotBlank()) "Photo Note" else "" },
             "quantity" to item.quantity.trim(),
             "category" to item.category.trim().ifBlank { "General Stock" },
             "notes" to item.notes.trim(),
             "isChecked" to item.isChecked,
             "isDeleted" to item.isDeleted,
+            "imageBase64" to item.imageBase64,
             "orderIndex" to item.orderIndex,
             "createdAt" to if (item.id.isBlank()) now else item.createdAt,
             "updatedAt" to now,
@@ -350,7 +362,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(ChecklistCategory::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<ChecklistCategory>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(list)
             }
@@ -435,7 +447,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(SharedChecklist::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<SharedChecklist>()?.copy(id = doc.id)
                 }?.filter {
                     it.id != PUBLIC_DEFAULT_BOARD_ID && it.shareCode != PUBLIC_DEFAULT_BOARD_ID
                 }?.sortedByDescending { it.updatedAt } ?: emptyList()
@@ -457,7 +469,7 @@ class TaskRepository(
                     close(error)
                     return@addSnapshotListener
                 }
-                val board = snapshot?.toObject(SharedChecklist::class.java)?.copy(id = snapshot.id)
+                val board = snapshot?.toObjectSafe<SharedChecklist>()?.copy(id = snapshot.id)
                 trySend(board)
             }
         awaitClose { listener.remove() }
@@ -479,7 +491,7 @@ class TaskRepository(
                     return@addSnapshotListener
                 }
                 val items = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(SharedChecklistItem::class.java)?.copy(id = doc.id)
+                    doc.toObjectSafe<SharedChecklistItem>()?.copy(id = doc.id)
                 } ?: emptyList()
                 trySend(items)
             }
@@ -606,7 +618,7 @@ class TaskRepository(
         }
 
         if (activeItems.isNotEmpty()) {
-            activeItems.chunked(400).forEach { chunk ->
+            activeItems.chunked(5).forEach { chunk ->
                 val batch = firestore.batch()
                 chunk.forEach { item ->
                     val itemId = item.id.ifBlank { UUID.randomUUID().toString() }
@@ -614,11 +626,12 @@ class TaskRepository(
                     batch.set(
                         itemRef,
                         mapOf(
-                            "title" to item.title.trim().ifBlank { "Stock Item" },
+                            "title" to item.title.trim().ifBlank { if (item.imageBase64.isNotBlank()) "Photo Note" else "Stock Item" },
                             "quantity" to item.quantity.trim(),
                             "category" to item.category.trim().ifBlank { "General Stock" },
                             "notes" to item.notes.trim(),
                             "isChecked" to item.isChecked,
+                            "imageBase64" to item.imageBase64,
                             "addedByUid" to user.uid,
                             "addedByName" to (user.displayName ?: "Shop Owner"),
                             "createdAt" to item.createdAt,
@@ -640,7 +653,7 @@ class TaskRepository(
         require(code.isNotBlank()) { "Invalid share code or link" }
         val docRef = sharedChecklistsCol().document(code)
         val snap = docRef.get().await()
-        val board = snap.toObject(SharedChecklist::class.java)?.copy(id = snap.id)
+        val board = snap.toObjectSafe<SharedChecklist>()?.copy(id = snap.id)
             ?: throw NoSuchElementException("Shared checklist '$code' not found")
         if (!board.memberIds.contains(uid)) {
             docRef.update(
@@ -659,11 +672,12 @@ class TaskRepository(
         val id = item.id.ifBlank { UUID.randomUUID().toString() }
         val now = System.currentTimeMillis()
         val payload = mapOf(
-            "title" to item.title.trim(),
+            "title" to item.title.trim().ifBlank { if (item.imageBase64.isNotBlank()) "Photo Note" else "" },
             "quantity" to item.quantity.trim(),
             "category" to item.category.trim().ifBlank { "Supplies" },
             "notes" to item.notes.trim(),
             "isChecked" to item.isChecked,
+            "imageBase64" to item.imageBase64,
             "addedByUid" to (item.addedByUid.ifBlank { user.uid }),
             "addedByName" to (item.addedByName.ifBlank { user.displayName ?: "Staff" }),
             "createdAt" to if (item.id.isBlank()) now else item.createdAt,
@@ -692,7 +706,7 @@ class TaskRepository(
         require(trimmedNew.isNotEmpty()) { "Category name cannot be empty" }
         val boardRef = sharedChecklistsCol().document(code)
         val boardSnap = boardRef.get().await()
-        val board = boardSnap.toObject(SharedChecklist::class.java)
+        val board = boardSnap.toObjectSafe<SharedChecklist>()
             ?: throw NoSuchElementException("Shared checklist not found")
         val updatedCats = board.categories.map { if (it == oldName) trimmedNew else it }
             .let { if (trimmedNew !in it) it + trimmedNew else it }

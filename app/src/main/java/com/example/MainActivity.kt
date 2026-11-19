@@ -1,21 +1,31 @@
 package com.example
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
@@ -26,6 +36,8 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,12 +49,14 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,6 +75,7 @@ import com.example.ui.ai.ShopAiAssistantDialog
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOutUser
 import com.example.ui.checklist.ChecklistScreen
+import com.example.ui.components.ShareUtils
 import com.example.ui.habits.HabitsScreen
 import com.example.ui.home.HomeDashboardScreen
 import com.example.ui.photos.PhotosScreen
@@ -70,6 +85,7 @@ import com.example.ui.theme.ShopKeepTheme
 import com.example.util.configureAppCheck
 import com.example.viewmodel.TaskViewModel
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.launch
 
 enum class ShopDestination(val title: String) {
@@ -81,23 +97,66 @@ enum class ShopDestination(val title: String) {
     MATRIX("Priority Grid")
 }
 
+private object CrashRecorder {
+    private const val PREFS = "shopkeep_diag_prefs"
+    private const val KEY_TRACE = "last_crash_trace"
+
+    @Volatile
+    private var installed = false
+
+    fun install(context: Context) {
+        if (installed) return
+        synchronized(this) {
+            if (installed) return
+            installed = true
+            val appContext = context.applicationContext
+            val previous = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                runCatching {
+                    val trace = Log.getStackTraceString(throwable)
+                    appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_TRACE, trace.take(4000))
+                        .commit()
+                }
+                previous?.uncaughtException(thread, throwable)
+            }
+        }
+    }
+
+    fun consumeLastCrash(context: Context): String? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val trace = prefs.getString(KEY_TRACE, null)
+        if (!trace.isNullOrBlank()) {
+            prefs.edit().remove(KEY_TRACE).apply()
+            return trace
+        }
+        return null
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     private var deepLinkParam by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        CrashRecorder.install(this)
 
         // Step 1: Configure App Check before UI or any Firebase calls
         configureAppCheck(this, intent)
 
         deepLinkParam = extractShareParam(intent)
+        val previousCrash = CrashRecorder.consumeLastCrash(this)
 
         setContent {
             ShopKeepTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     ShopKeepAppRoot(
                         incomingShareCode = deepLinkParam,
+                        previousCrashTrace = previousCrash,
                         onConsumedDeepLink = { deepLinkParam = null }
                     )
                 }
@@ -123,14 +182,51 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShopKeepAppRoot(
     incomingShareCode: String?,
+    previousCrashTrace: String? = null,
     onConsumedDeepLink: () -> Unit
 ) {
     val context = LocalContext.current
-    val auth = remember { FirebaseAuth.getInstance() }
+    var crashTraceToShow by remember(previousCrashTrace) { mutableStateOf(previousCrashTrace) }
+
+    val initResult = remember {
+        runCatching {
+            val auth = FirebaseAuth.getInstance()
+            val repo = TaskRepository.create(context)
+            auth to repo
+        }
+    }
+
+    val pair = initResult.getOrNull()
+    if (pair == null) {
+        val error = initResult.exceptionOrNull()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "ShopKeep Initialization Error",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = error?.localizedMessage ?: "Failed to initialize cloud services.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        return
+    }
+
+    val (auth, repository) = pair
     var currentUser by remember { mutableStateOf(auth.currentUser) }
 
     DisposableEffect(auth) {
@@ -141,7 +237,6 @@ fun ShopKeepAppRoot(
         onDispose { auth.removeAuthStateListener(listener) }
     }
 
-    val repository = remember { TaskRepository.create(context) }
     val viewModel: TaskViewModel = viewModel(
         factory = TaskViewModel.Factory(repository, context)
     )
@@ -153,7 +248,8 @@ fun ShopKeepAppRoot(
         }
     }
 
-    if (currentUser == null) {
+    val activeUser = currentUser
+    if (activeUser == null) {
         LaunchedEffect(Unit) {
             viewModel.stopSync()
         }
@@ -162,13 +258,65 @@ fun ShopKeepAppRoot(
                 currentUser = auth.currentUser
             }
         )
-        return
+    } else {
+        key(activeUser.uid) {
+            AuthenticatedShopKeepContent(
+                user = activeUser,
+                viewModel = viewModel,
+                hasIncomingDeepLink = !incomingShareCode.isNullOrBlank(),
+                onSignedOut = {
+                    currentUser = null
+                }
+            )
+        }
     }
 
-    LaunchedEffect(currentUser?.uid) {
-        if (currentUser != null) {
-            viewModel.startSyncForCurrentUser()
-        }
+    if (!crashTraceToShow.isNullOrBlank()) {
+        AlertDialog(
+            onDismissRequest = { crashTraceToShow = null },
+            title = { Text("Previous Launch Error Report", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = crashTraceToShow ?: "",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    ShareUtils.copyToClipboard(context, "Crash Log", crashTraceToShow ?: "")
+                    crashTraceToShow = null
+                }) {
+                    Text("Copy Log")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { crashTraceToShow = null }) {
+                    Text("Dismiss")
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AuthenticatedShopKeepContent(
+    user: FirebaseUser,
+    viewModel: TaskViewModel,
+    hasIncomingDeepLink: Boolean,
+    onSignedOut: () -> Unit
+) {
+    val context = LocalContext.current
+
+    LaunchedEffect(user.uid) {
+        viewModel.startSyncForCurrentUser()
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -176,13 +324,15 @@ fun ShopKeepAppRoot(
             contract = ActivityResultContracts.RequestPermission(),
             onResult = {}
         )
-        LaunchedEffect(Unit) {
+        LaunchedEffect(user.uid) {
             val granted = ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
-                permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                runCatching {
+                    permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
         }
     }
@@ -193,8 +343,8 @@ fun ShopKeepAppRoot(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(uiState.activeSharedCode) {
-        if (uiState.activeSharedCode != null && incomingShareCode != null) {
+    LaunchedEffect(uiState.activeSharedCode, hasIncomingDeepLink) {
+        if (uiState.activeSharedCode != null && hasIncomingDeepLink) {
             currentDestination = ShopDestination.CHECKLIST
         }
     }
@@ -222,6 +372,7 @@ fun ShopKeepAppRoot(
     )
 
     Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -262,7 +413,7 @@ fun ShopKeepAppRoot(
                             scope.launch {
                                 viewModel.stopSync()
                                 signOutUser(context)
-                                currentUser = null
+                                onSignedOut()
                             }
                         },
                         modifier = Modifier.testTag("sign_out_button")
@@ -297,7 +448,7 @@ fun ShopKeepAppRoot(
             when (currentDestination) {
                 ShopDestination.HOME -> HomeDashboardScreen(
                     uiState = uiState,
-                    userDisplayName = currentUser?.displayName ?: "Shop Owner",
+                    userDisplayName = user.displayName ?: "Shop Owner",
                     onOpenTasks = { currentDestination = ShopDestination.TASKS },
                     onOpenChecklist = { currentDestination = ShopDestination.CHECKLIST },
                     onOpenPhotos = { currentDestination = ShopDestination.PHOTOS },

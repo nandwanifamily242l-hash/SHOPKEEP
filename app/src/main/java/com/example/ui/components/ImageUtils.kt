@@ -53,7 +53,12 @@ object ImageUtils {
     fun decodeBitmapFromBase64(base64: String): Bitmap? {
         if (base64.isBlank()) return null
         return try {
-            val bytes = Base64.decode(base64, Base64.DEFAULT)
+            val cleaned = if (base64.contains("base64,")) {
+                base64.substringAfter("base64,").trim()
+            } else {
+                base64.trim()
+            }
+            val bytes = Base64.decode(cleaned, Base64.DEFAULT)
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         } catch (_: Exception) {
             null
@@ -256,7 +261,7 @@ object ImageUtils {
             out.reset()
             scaled.compress(Bitmap.CompressFormat.JPEG, currentQuality, out)
             currentQuality -= 10
-        } while (out.size() > 650_000 && currentQuality >= 35)
+        } while (out.size() > 450_000 && currentQuality >= 35)
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 

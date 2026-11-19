@@ -72,6 +72,19 @@ service cloud.firestore {
       return !('isPublicEditable' in board) || board.isPublicEditable == true;
     }
 
+    function isBoardMember(shareId) {
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/shared_checklists/$(shareId)).data.ownerId == request.auth.uid
+        || request.auth.uid in get(/databases/$(database)/documents/shared_checklists/$(shareId)).data.memberIds
+      );
+    }
+
+    function isOnlyCheckToggle() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isChecked', 'updatedAt'])
+        && request.resource.data.isChecked is bool
+        && request.resource.data.updatedAt is int;
+    }
+
     function isValidSharedItem(data) {
       return isValidNonEmptyString(data.title, 200)
         && isValidNonEmptyString(data.category, 100)
@@ -151,11 +164,16 @@ service cloud.firestore {
 
       match /items/{itemId} {
         allow read: if true;
-        allow create, update: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
-          && (isSignedIn() || isPublicBoardEditable(shareId))
+        allow create: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
+          && isBoardMember(shareId)
           && isValidSharedItem(request.resource.data);
+        allow update: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
+          && (
+            (isBoardMember(shareId) && isValidSharedItem(request.resource.data))
+            || (isPublicBoardEditable(shareId) && isOnlyCheckToggle())
+          );
         allow delete: if exists(/databases/$(database)/documents/shared_checklists/$(shareId))
-          && (isSignedIn() || isPublicBoardEditable(shareId));
+          && isBoardMember(shareId);
       }
     }
 

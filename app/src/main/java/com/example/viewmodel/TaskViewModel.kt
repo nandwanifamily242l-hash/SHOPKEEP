@@ -406,7 +406,7 @@ class TaskViewModel(
         val combined = (defaultChecklistCategories.filter { it !in hiddenNames } + activeCustomNames + itemCategoryNames)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .distinct()
+            .distinctBy { it.lowercase(Locale.getDefault()) }
 
         return sortCategoryNames(
             categories = combined,
@@ -465,21 +465,45 @@ class TaskViewModel(
         title: String,
         quantity: String,
         category: String,
-        notes: String = ""
+        notes: String = "",
+        imageBase64: String? = null
     ) {
         viewModelScope.launch {
             val existing = _uiState.value.checklistItems.firstOrNull { it.id == id }
+            val resolvedPhoto = imageBase64 ?: existing?.imageBase64 ?: ""
+            val resolvedTitle = title.trim().ifBlank { if (resolvedPhoto.isNotBlank()) "Photo Note" else "" }
+            if (resolvedTitle.isBlank()) return@launch
             val item = (existing ?: ChecklistItem()).copy(
                 id = id,
-                title = title,
+                title = resolvedTitle,
                 quantity = quantity,
                 category = category,
-                notes = notes
+                notes = notes,
+                imageBase64 = resolvedPhoto
             )
             repository.upsertChecklistItem(item)
+                .onSuccess {
+                    if (resolvedPhoto.isNotBlank()) {
+                        _uiState.update { it.copy(statusBanner = "Photo note saved under \"$category\"") }
+                    }
+                }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }
+        }
+    }
+
+    fun unselectAllChecklistPhotos() {
+        viewModelScope.launch {
+            val selectedPhotos = _uiState.value.checklistItems.filter {
+                !it.isDeleted && it.imageBase64.isNotBlank() && it.isChecked
+            }
+            selectedPhotos.forEach { item ->
+                repository.upsertChecklistItem(item.copy(isChecked = false))
+                    .onFailure { t ->
+                        _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                    }
+            }
         }
     }
 
@@ -550,9 +574,9 @@ class TaskViewModel(
             repository.setSharedBoardPublicEditable(shareCode, enabled)
                 .onSuccess {
                     val msg = if (enabled) {
-                        "Public editing ON — anyone with the link can view & edit"
+                        "Public mark/unmark ON — visitors can view & check items only"
                     } else {
-                        "Restricted mode — Google Sign-In required to edit"
+                        "Strictly view-only — sign-in required even to mark items"
                     }
                     _uiState.update { it.copy(statusBanner = msg) }
                 }
@@ -617,22 +641,47 @@ class TaskViewModel(
         title: String,
         quantity: String,
         category: String,
-        notes: String = ""
+        notes: String = "",
+        imageBase64: String? = null
     ) {
         val code = _uiState.value.activeSharedCode ?: return
         viewModelScope.launch {
             val existing = _uiState.value.activeSharedItems.firstOrNull { it.id == id }
+            val resolvedPhoto = imageBase64 ?: existing?.imageBase64 ?: ""
+            val resolvedTitle = title.trim().ifBlank { if (resolvedPhoto.isNotBlank()) "Photo Note" else "" }
+            if (resolvedTitle.isBlank()) return@launch
             val item = (existing ?: SharedChecklistItem()).copy(
                 id = id,
-                title = title,
+                title = resolvedTitle,
                 quantity = quantity,
                 category = category,
-                notes = notes
+                notes = notes,
+                imageBase64 = resolvedPhoto
             )
             repository.upsertSharedItem(code, item)
+                .onSuccess {
+                    if (resolvedPhoto.isNotBlank()) {
+                        _uiState.update { it.copy(statusBanner = "Photo note synced to live board") }
+                    }
+                }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }
+        }
+    }
+
+    fun unselectAllSharedPhotos() {
+        val code = _uiState.value.activeSharedCode ?: return
+        viewModelScope.launch {
+            val selectedPhotos = _uiState.value.activeSharedItems.filter {
+                it.imageBase64.isNotBlank() && it.isChecked
+            }
+            selectedPhotos.forEach { item ->
+                repository.upsertSharedItem(code, item.copy(isChecked = false))
+                    .onFailure { t ->
+                        _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                    }
+            }
         }
     }
 

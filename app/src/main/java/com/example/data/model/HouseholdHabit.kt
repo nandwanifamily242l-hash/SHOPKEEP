@@ -1,6 +1,8 @@
 package com.example.data.model
 
+import androidx.annotation.Keep
 import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.IgnoreExtraProperties
 
 enum class HabitFrequency(val label: String) {
     DAILY("Daily Routine"),
@@ -12,6 +14,8 @@ enum class HabitFrequency(val label: String) {
     }
 }
 
+@Keep
+@IgnoreExtraProperties
 data class HouseholdHabit(
     @DocumentId val id: String = "",
     val title: String = "",

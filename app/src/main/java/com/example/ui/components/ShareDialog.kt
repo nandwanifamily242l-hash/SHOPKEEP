@@ -175,16 +175,16 @@ fun ShareLinkReadyDialog(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "Open Public Editing",
+                                    text = "Public View & Mark/Unmark",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
                             Text(
                                 text = if (board.isPublicEditable) {
-                                    "Anyone with link can check & add items without login"
+                                    "Public link is view-only for stock; visitors can only mark & unmark items"
                                 } else {
-                                    "View only on web — Google Sign-In required to edit"
+                                    "Strictly view-only — Google Sign-In required even to mark items"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
