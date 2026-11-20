@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -138,6 +139,7 @@ fun ChecklistScreen(
 
     var showCreateBoardDialog by remember { mutableStateOf(false) }
     var showJoinBoardDialog by remember { mutableStateOf(false) }
+    var showManageSharedBoards by remember { mutableStateOf(false) }
     var showAddSharedItemDialog by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
 
@@ -755,6 +757,15 @@ fun ChecklistScreen(
                                         modifier = Modifier.height(32.dp).testTag("edit_shared_categories_button")
                                     )
                                 }
+                                if (uiState.sharedChecklists.isNotEmpty()) {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = { showManageSharedBoards = true },
+                                        leadingIcon = { Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                        label = { Text("Boards") },
+                                        modifier = Modifier.height(32.dp).testTag("manage_shared_boards_button")
+                                    )
+                                }
                             }
 
                             if (uiState.sharedChecklists.isNotEmpty()) {
@@ -1179,6 +1190,19 @@ fun ChecklistScreen(
             dismissButton = {
                 TextButton(onClick = { renamingCategoryTarget = null }) { Text("Cancel") }
             }
+        )
+    }
+
+    if (showManageSharedBoards) {
+        ManageSharedBoardsDialog(
+            boards = uiState.sharedChecklists,
+            activeShareCode = uiState.activeSharedCode,
+            onSelectBoard = { code -> viewModel.selectSharedChecklist(code) },
+            onCreateNewBoard = { showCreateBoardDialog = true },
+            onMoveBoard = { code, dir -> viewModel.moveSharedBoard(code, dir) },
+            onRenameBoard = { code, newTitle -> viewModel.renameSharedBoard(code, newTitle) },
+            onDeleteBoard = { code -> viewModel.deleteSharedBoard(code) },
+            onDismiss = { showManageSharedBoards = false }
         )
     }
 

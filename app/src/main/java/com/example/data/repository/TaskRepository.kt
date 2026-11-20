@@ -588,7 +588,9 @@ class TaskRepository(
                     doc.toObjectSafe<SharedChecklist>()?.copy(id = doc.id)
                 }?.filter {
                     it.id != PUBLIC_DEFAULT_BOARD_ID && it.shareCode != PUBLIC_DEFAULT_BOARD_ID
-                }?.sortedByDescending { it.updatedAt } ?: emptyList()
+                }?.sortedWith(
+                    compareBy<SharedChecklist>({ it.sortOrder }, { -it.updatedAt })
+                ) ?: emptyList()
                 trySend(list)
             }
         awaitClose { listener.remove() }
@@ -653,6 +655,7 @@ class TaskRepository(
             "memberIds" to listOf(user.uid),
             "categories" to initialCategories,
             "isPublicEditable" to isPublicEditable,
+            "sortOrder" to 0,
             "createdAt" to now,
             "updatedAt" to now
         )
@@ -951,6 +954,70 @@ class TaskRepository(
         sharedChecklistsCol().document(code).update(
             mapOf("categories" to cleaned, "updatedAt" to System.currentTimeMillis())
         ).await()
+    }
+
+    suspend fun renameSharedChecklist(shareCode: String, newTitle: String): Result<Unit> = runCatching {
+        requireUid()
+        val code = shareCode.trim().uppercase()
+        val cleanTitle = newTitle.trim().take(120)
+        require(code.isNotBlank() && cleanTitle.isNotEmpty()) { "Board name cannot be empty" }
+        val now = System.currentTimeMillis()
+        sharedChecklistsCol().document(code).update(
+            mapOf("title" to cleanTitle, "updatedAt" to now)
+        ).await()
+        val pointerRef = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID)
+        val pointerSnap = pointerRef.get().await()
+        if (pointerSnap.exists() && pointerSnap.getString("activeShareCode") == code) {
+            pointerRef.update(
+                mapOf("title" to cleanTitle, "updatedAt" to now)
+            ).await()
+        }
+    }
+
+    suspend fun deleteSharedChecklist(shareCode: String): Result<Unit> = runCatching {
+        val uid = requireUid()
+        val code = shareCode.trim().uppercase()
+        require(code.isNotBlank()) { "Invalid board code" }
+        val boardRef = sharedChecklistsCol().document(code)
+        val boardSnap = boardRef.get().await()
+        val ownerId = boardSnap.getString("ownerId").orEmpty()
+        if (ownerId == uid) {
+            val itemDocs = boardRef.collection("items").get().await().documents
+            itemDocs.chunked(350).forEach { chunk ->
+                val batch = firestore.batch()
+                chunk.forEach { doc -> batch.delete(doc.reference) }
+                batch.commit().await()
+            }
+            boardRef.delete().await()
+            val pointerRef = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID)
+            val pointerSnap = pointerRef.get().await()
+            if (pointerSnap.exists() && pointerSnap.getString("activeShareCode") == code) {
+                pointerRef.delete().await()
+            }
+        } else {
+            boardRef.update(
+                mapOf(
+                    "memberIds" to FieldValue.arrayRemove(uid),
+                    "updatedAt" to System.currentTimeMillis()
+                )
+            ).await()
+        }
+    }
+
+    suspend fun reorderSharedChecklists(orderedShareCodes: List<String>): Result<Unit> = runCatching {
+        requireUid()
+        val cleanedCodes = orderedShareCodes
+            .map { it.trim().uppercase() }
+            .filter { it.isNotEmpty() && it != PUBLIC_DEFAULT_BOARD_ID }
+            .distinct()
+        if (cleanedCodes.isEmpty()) return@runCatching
+        cleanedCodes.withIndex().chunked(350).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { (idx, code) ->
+                batch.update(sharedChecklistsCol().document(code), "sortOrder", idx + 1)
+            }
+            batch.commit().await()
+        }
     }
 
     private fun categoryKey(name: String): String =

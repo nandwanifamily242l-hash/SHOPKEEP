@@ -19,6 +19,7 @@ data class SharedChecklist(
     @get:PropertyName("isPublicEditable")
     @PropertyName("isPublicEditable")
     val isPublicEditable: Boolean = true,
+    val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

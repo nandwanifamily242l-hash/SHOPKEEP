@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.ChecklistItem
 import com.example.data.model.HouseArea
@@ -361,6 +362,73 @@ class ScreenCompositionTest {
         composeRule.onNodeWithTag("confirm_pick_selected_photos_button").performClick()
         org.junit.Assert.assertEquals(1, pickedCount)
     }
+
+    @Test
+    fun manageSharedBoardsDialog_supportsReorderRenameAndDelete() {
+        var boards by mutableStateOf(
+            listOf(
+                SharedChecklist(id = "SHOP-A1", shareCode = "SHOP-A1", title = "Morning Counter", sortOrder = 1),
+                SharedChecklist(id = "SHOP-B2", shareCode = "SHOP-B2", title = "Saree Stock", sortOrder = 2)
+            )
+        )
+        var deletedCode: String? = null
+
+        composeRule.setContent {
+            ShopKeepTheme {
+                com.example.ui.checklist.ManageSharedBoardsDialog(
+                    boards = boards,
+                    activeShareCode = "SHOP-A1",
+                    onSelectBoard = {},
+                    onCreateNewBoard = {},
+                    onMoveBoard = { code, dir ->
+                        val mutable = boards.toMutableList()
+                        val idx = mutable.indexOfFirst { it.shareCode == code }
+                        if (idx >= 0) {
+                            val target = (idx + dir).coerceIn(0, mutable.lastIndex)
+                            if (target != idx) {
+                                val moved = mutable.removeAt(idx)
+                                mutable.add(target, moved)
+                                boards = mutable.mapIndexed { i, b -> b.copy(sortOrder = i + 1) }
+                            }
+                        }
+                    },
+                    onRenameBoard = { code, newTitle ->
+                        boards = boards.map { if (it.shareCode == code) it.copy(title = newTitle) else it }
+                    },
+                    onDeleteBoard = { code ->
+                        deletedCode = code
+                        boards = boards.filterNot { it.shareCode == code }
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("manage_board_row_SHOP-A1").assertIsDisplayed()
+        composeRule.onNodeWithTag("manage_board_row_SHOP-B2").assertIsDisplayed()
+
+        // Move SHOP-B2 up so it becomes #1 above SHOP-A1
+        composeRule.onNodeWithTag("move_board_up_SHOP-B2").performClick()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertEquals(listOf("SHOP-B2", "SHOP-A1"), boards.map { it.shareCode })
+
+        // Rename SHOP-B2
+        composeRule.onNodeWithTag("rename_board_SHOP-B2").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("rename_board_input").performTextReplacement("Fancy Sarees")
+        composeRule.onNodeWithTag("confirm_rename_board_button").performClick()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertEquals("Fancy Sarees", boards.first().title)
+
+        // Delete SHOP-A1 with confirmation
+        composeRule.onNodeWithTag("delete_board_SHOP-A1").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("confirm_delete_board_button").performClick()
+        composeRule.waitForIdle()
+        org.junit.Assert.assertEquals("SHOP-A1", deletedCode)
+        org.junit.Assert.assertEquals(listOf("SHOP-B2"), boards.map { it.shareCode })
+    }
 }
+
 
 

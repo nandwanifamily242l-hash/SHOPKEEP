@@ -132,9 +132,14 @@ class TaskViewModel(
                 repository.observeMySharedChecklists()
                     .catch { handleFlowError(it) }
                     .collect { boards ->
+                        val activeCode = _uiState.value.activeSharedCode
+                        val activeStillExists = activeCode != null &&
+                            boards.any { it.shareCode.equals(activeCode, ignoreCase = true) }
                         _uiState.update { it.copy(sharedChecklists = boards) }
-                        if (_uiState.value.activeSharedCode == null && boards.isNotEmpty()) {
+                        if ((!activeStillExists || activeCode == null) && boards.isNotEmpty()) {
                             selectSharedChecklist(boards.first().shareCode)
+                        } else if (!activeStillExists && boards.isEmpty()) {
+                            selectSharedChecklist(null)
                         }
                     }
             }
@@ -876,6 +881,75 @@ class TaskViewModel(
                     }
                     _uiState.update { it.copy(statusBanner = msg) }
                 }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun renameSharedBoard(shareCode: String, newTitle: String) {
+        val code = shareCode.trim().uppercase()
+        val cleanTitle = newTitle.trim().take(120)
+        if (code.isBlank() || cleanTitle.isEmpty()) return
+        _uiState.update { state ->
+            state.copy(
+                sharedChecklists = state.sharedChecklists.map { board ->
+                    if (board.shareCode.equals(code, ignoreCase = true)) board.copy(title = cleanTitle) else board
+                },
+                activeSharedBoard = if (state.activeSharedBoard?.shareCode.equals(code, ignoreCase = true)) {
+                    state.activeSharedBoard?.copy(title = cleanTitle)
+                } else {
+                    state.activeSharedBoard
+                }
+            )
+        }
+        viewModelScope.launch {
+            repository.renameSharedChecklist(code, cleanTitle)
+                .onSuccess {
+                    _uiState.update { it.copy(statusBanner = "Board renamed to \"$cleanTitle\"") }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun deleteSharedBoard(shareCode: String) {
+        val code = shareCode.trim().uppercase()
+        if (code.isBlank()) return
+        val remaining = _uiState.value.sharedChecklists.filterNot {
+            it.shareCode.equals(code, ignoreCase = true)
+        }
+        val wasActive = _uiState.value.activeSharedCode.equals(code, ignoreCase = true)
+        _uiState.update { it.copy(sharedChecklists = remaining) }
+        if (wasActive) {
+            selectSharedChecklist(remaining.firstOrNull()?.shareCode)
+        }
+        viewModelScope.launch {
+            repository.deleteSharedChecklist(code)
+                .onSuccess {
+                    _uiState.update { it.copy(statusBanner = "Live board removed") }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun moveSharedBoard(shareCode: String, direction: Int) {
+        val currentList = _uiState.value.sharedChecklists.toMutableList()
+        val index = currentList.indexOfFirst { it.shareCode.equals(shareCode, ignoreCase = true) }
+        if (index == -1) return
+        val targetIndex = (index + direction).coerceIn(0, currentList.lastIndex)
+        if (targetIndex == index) return
+        val moved = currentList.removeAt(index)
+        currentList.add(targetIndex, moved)
+        val reindexed = currentList.mapIndexed { idx, board ->
+            board.copy(sortOrder = idx + 1)
+        }
+        _uiState.update { it.copy(sharedChecklists = reindexed) }
+        viewModelScope.launch {
+            repository.reorderSharedChecklists(reindexed.map { it.shareCode })
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }
