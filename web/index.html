@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ShopKeep Live Checklist</title>
-  <link rel="stylesheet" href="styles.css?v=9" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <header class="topbar">
@@ -30,6 +30,11 @@
           <p id="boardMeta" class="subtitle"></p>
         </div>
         <span id="liveBadge" class="badge-live">LIVE SYNC</span>
+      </div>
+
+      <div id="boardSwitcherBar" class="board-switcher-bar hidden">
+        <label for="boardSelect" class="board-select-label">Board</label>
+        <select id="boardSelect" class="board-select" aria-label="Switch live board"></select>
       </div>
 
       <div id="viewToolbar" class="view-toolbar">
@@ -68,7 +73,7 @@
     </section>
 
     <details class="card switch-details">
-      <summary>Switch to a different board code (optional)</summary>
+      <summary>Open another board by code (optional)</summary>
       <div class="join-bar">
         <input id="codeInput" type="text" placeholder="Optional board code (e.g. SHOP-A1B2C3)" />
         <button id="openCodeBtn" class="btn btn-primary" type="button">Open Board</button>
@@ -89,6 +94,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=9"></script>
+  <script type="module" src="app.js?v=10"></script>
 </body>
 </html>

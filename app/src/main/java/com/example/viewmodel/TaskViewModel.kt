@@ -136,10 +136,13 @@ class TaskViewModel(
                         val activeStillExists = activeCode != null &&
                             boards.any { it.shareCode.equals(activeCode, ignoreCase = true) }
                         _uiState.update { it.copy(sharedChecklists = boards) }
-                        if ((!activeStillExists || activeCode == null) && boards.isNotEmpty()) {
+                        if (!activeStillExists && boards.isNotEmpty()) {
                             selectSharedChecklist(boards.first().shareCode)
                         } else if (!activeStillExists && boards.isEmpty()) {
                             selectSharedChecklist(null)
+                        }
+                        viewModelScope.launch {
+                            repository.syncPublicBoardsDirectory(boards)
                         }
                     }
             }
@@ -958,6 +961,9 @@ class TaskViewModel(
         _uiState.update { it.copy(sharedChecklists = reindexed) }
         viewModelScope.launch {
             repository.reorderSharedChecklists(reindexed.map { it.shareCode })
+                .onSuccess {
+                    repository.syncPublicBoardsDirectory(reindexed)
+                }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }

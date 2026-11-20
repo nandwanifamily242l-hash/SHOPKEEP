@@ -576,6 +576,7 @@ function openBoard(rawCode) {
 
   activeCode = code;
   if (codeInput) codeInput.value = code;
+  renderBoardSwitcher();
 
   if (unsubBoard) unsubBoard();
   if (unsubItems) unsubItems();
@@ -591,11 +592,14 @@ function openBoard(rawCode) {
         currentBoardData = null;
         boardTitle.textContent = `Checklist "${code}" not found`;
         boardMeta.textContent = "Ask the shop owner to tap 'Publish & Share Public Live Link' in ShopKeep.";
+        renderBoardSwitcher();
         refreshAccessUi();
         return;
       }
       currentBoardData = snap.data();
       boardTitle.textContent = currentBoardData.title || "ShopKeep Checklist";
+      rememberBoardLocally(code, boardTitle.textContent);
+      renderBoardSwitcher();
       refreshAccessUi();
     },
     (err) => {
@@ -620,32 +624,55 @@ function openBoard(rawCode) {
   );
 }
 
-function listenToPublicDefault() {
+function subscribeToPublicDirectory(autoOpenDefault = true) {
   if (unsubDefault) unsubDefault();
   const defaultRef = doc(db, "shared_checklists", PUBLIC_DEFAULT_DOC);
   unsubDefault = onSnapshot(
     defaultRef,
     (snap) => {
       if (!snap.exists()) {
-        boardSection.classList.add("hidden");
-        emptyState.classList.remove("hidden");
-        emptyTitle.textContent = "Public Checklist Not Published Yet";
-        emptyDesc.textContent =
-          "Open your ShopKeep Android app -> Checklists -> tap \"Publish & Share Public Live Link (No Code)\" once. It will appear here automatically!";
+        publicDirectoryBoards = [];
+        renderBoardSwitcher();
+        if (autoOpenDefault && !activeCode) {
+          boardSection.classList.add("hidden");
+          emptyState.classList.remove("hidden");
+          emptyTitle.textContent = "Public Checklist Not Published Yet";
+          emptyDesc.textContent =
+            "Open your ShopKeep Android app -> Checklists -> tap \"Public Link\" once. It will appear here automatically!";
+        }
         return;
       }
-      const data = snap.data();
-      const targetCode = (data.activeShareCode || "").trim();
-      if (!targetCode) {
-        emptyTitle.textContent = "Waiting for Live Board...";
-        emptyDesc.textContent = "Tap 'Publish & Share Public Live Link' in the ShopKeep app.";
-        return;
+      const data = snap.data() || {};
+      const dirRaw = Array.isArray(data.boardsDirectory) ? data.boardsDirectory : [];
+      publicDirectoryBoards = dirRaw
+        .filter((entry) => entry && entry.shareCode)
+        .map((entry) => ({
+          shareCode: String(entry.shareCode).trim().toUpperCase(),
+          title: String(entry.title || "Shop Checklist").trim(),
+          sortOrder: typeof entry.sortOrder === "number" ? entry.sortOrder : 0
+        }));
+
+      renderBoardSwitcher();
+
+      const targetCode = (data.activeShareCode || "").trim().toUpperCase() ||
+        (publicDirectoryBoards[0]?.shareCode || "");
+
+      if (autoOpenDefault && !userSelectedBoardManually) {
+        if (!targetCode) {
+          if (!activeCode) {
+            emptyTitle.textContent = "Waiting for Live Board...";
+            emptyDesc.textContent = "Tap 'Public Link' in the ShopKeep app.";
+          }
+          return;
+        }
+        openBoard(targetCode);
       }
-      openBoard(targetCode);
     },
     (err) => {
-      emptyTitle.textContent = "Connection Issue";
-      emptyDesc.textContent = err?.message || "Unable to connect to Firebase Firestore.";
+      if (autoOpenDefault && !activeCode) {
+        emptyTitle.textContent = "Connection Issue";
+        emptyDesc.textContent = err?.message || "Unable to connect to Firebase Firestore.";
+      }
     }
   );
 }
@@ -653,11 +680,16 @@ function listenToPublicDefault() {
 openCodeBtn.addEventListener("click", () => {
   const val = codeInput.value.trim();
   if (val) {
-    if (unsubDefault) {
-      unsubDefault();
-      unsubDefault = null;
-    }
+    userSelectedBoardManually = true;
+    selectedCategoryFilter = "ALL";
     openBoard(val);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("checklist", val.toUpperCase());
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // Ignore history errors
+    }
   }
 });
 
@@ -813,9 +845,11 @@ addItemForm.addEventListener("submit", async (e) => {
 });
 
 const params = new URLSearchParams(window.location.search);
-const initialCode = params.get("checklist");
+const initialCode = (params.get("checklist") || "").trim();
 if (initialCode) {
+  userSelectedBoardManually = true;
   openBoard(initialCode);
+  subscribeToPublicDirectory(false);
 } else {
-  listenToPublicDefault();
+  subscribeToPublicDirectory(true);
 }

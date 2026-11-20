@@ -1020,6 +1020,78 @@ class TaskRepository(
         }
     }
 
+    suspend fun syncPublicBoardsDirectory(boards: List<SharedChecklist>): Result<Unit> = runCatching {
+        val user = auth.currentUser ?: return@runCatching
+        val filtered = boards.filter {
+            it.id != PUBLIC_DEFAULT_BOARD_ID &&
+                it.shareCode != PUBLIC_DEFAULT_BOARD_ID &&
+                it.shareCode.isNotBlank()
+        }
+        val directoryPayload = filtered.map { board ->
+            mapOf(
+                "shareCode" to board.shareCode.trim().uppercase(),
+                "title" to board.title.trim().ifBlank { "Shop Checklist" }.take(120),
+                "sortOrder" to board.sortOrder
+            )
+        }
+        val pointerRef = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID)
+        val snap = pointerRef.get().await()
+        val now = System.currentTimeMillis()
+        if (!snap.exists()) {
+            val first = filtered.firstOrNull() ?: return@runCatching
+            pointerRef.set(
+                mapOf(
+                    "shareCode" to PUBLIC_DEFAULT_BOARD_ID,
+                    "activeShareCode" to first.shareCode.trim().uppercase(),
+                    "title" to first.title.trim().ifBlank { "Shop Stock Checklist" }.take(120),
+                    "ownerId" to user.uid,
+                    "ownerName" to (user.displayName ?: "Shop Owner"),
+                    "memberIds" to listOf(user.uid),
+                    "isPublicEditable" to first.isPublicEditable,
+                    "boardsDirectory" to directoryPayload,
+                    "createdAt" to now,
+                    "updatedAt" to now
+                )
+            ).await()
+            return@runCatching
+        }
+
+        val currentActive = snap.getString("activeShareCode").orEmpty().trim().uppercase()
+        val activeExists = currentActive.isNotEmpty() &&
+            filtered.any { it.shareCode.equals(currentActive, ignoreCase = true) }
+        val existingDir = (snap.get("boardsDirectory") as? List<*>)?.mapNotNull { raw ->
+            val m = raw as? Map<*, *> ?: return@mapNotNull null
+            Triple(
+                m["shareCode"]?.toString()?.trim()?.uppercase().orEmpty(),
+                m["title"]?.toString()?.trim().orEmpty(),
+                (m["sortOrder"] as? Number)?.toInt() ?: 0
+            )
+        } ?: emptyList()
+        val desiredDir = filtered.map {
+            Triple(
+                it.shareCode.trim().uppercase(),
+                it.title.trim().ifBlank { "Shop Checklist" }.take(120),
+                it.sortOrder
+            )
+        }
+
+        if (existingDir == desiredDir && (activeExists || filtered.isEmpty())) {
+            return@runCatching
+        }
+
+        val updates = mutableMapOf<String, Any>(
+            "boardsDirectory" to directoryPayload,
+            "updatedAt" to now
+        )
+        if (!activeExists && filtered.isNotEmpty()) {
+            val fallback = filtered.first()
+            updates["activeShareCode"] = fallback.shareCode.trim().uppercase()
+            updates["title"] = fallback.title.trim().ifBlank { "Shop Stock Checklist" }.take(120)
+            updates["isPublicEditable"] = fallback.isPublicEditable
+        }
+        pointerRef.update(updates).await()
+    }
+
     private fun categoryKey(name: String): String =
         name.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "cat_${System.currentTimeMillis()}" }
 
