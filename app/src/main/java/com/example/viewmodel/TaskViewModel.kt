@@ -370,6 +370,42 @@ class TaskViewModel(
         }
     }
 
+    fun saveMultipleAreaPhotos(
+        encodedPhotos: List<Pair<String, String>>,
+        baseTitle: String,
+        category: String,
+        notes: String = "",
+        photoTitles: List<String> = emptyList()
+    ) {
+        if (encodedPhotos.isEmpty()) return
+        val typedPrefix = baseTitle.trim()
+        val cleanCategory = category.trim().ifBlank { "Display Shelves" }
+        viewModelScope.launch {
+            val models = encodedPhotos.mapIndexed { idx, (uri, b64) ->
+                val resolvedTitle = when {
+                    typedPrefix.isNotBlank() && encodedPhotos.size == 1 -> typedPrefix
+                    typedPrefix.isNotBlank() -> "$typedPrefix ${idx + 1}"
+                    else -> photoTitles.getOrNull(idx)?.trim().orEmpty()
+                        .ifBlank { if (encodedPhotos.size == 1) "Shop Photo" else "Shop Photo ${idx + 1}" }
+                }
+                AreaPhoto(
+                    title = resolvedTitle,
+                    category = cleanCategory,
+                    notes = notes.trim(),
+                    imageUri = uri,
+                    imageBase64 = b64
+                )
+            }
+            repository.addAreaPhotos(models)
+                .onSuccess { count ->
+                    _uiState.update { it.copy(statusBanner = "$count photos saved under \"$cleanCategory\"") }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
     fun deletePhoto(photoId: String) {
         viewModelScope.launch {
             repository.deletePhoto(photoId)
@@ -449,11 +485,31 @@ class TaskViewModel(
 
     fun renameChecklistCategory(oldName: String, newName: String) {
         val trimmed = newName.trim()
-        if (trimmed.isEmpty() || trimmed == oldName) return
-        val isDefault = defaultChecklistCategories.any { it.equals(oldName, ignoreCase = true) }
+        if (trimmed.isEmpty() || trimmed == oldName.trim()) return
+        val isDefault = defaultChecklistCategories.any { it.equals(oldName.trim(), ignoreCase = true) }
         viewModelScope.launch {
             repository.renameChecklistCategory(oldName, trimmed, isDefault)
                 .onSuccess { _uiState.update { it.copy(statusBanner = "Category renamed to \"$trimmed\"") } }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun deleteChecklistCategory(categoryName: String, moveItemsTo: String? = null) {
+        val trimmed = categoryName.trim()
+        if (trimmed.isEmpty()) return
+        val isDefault = defaultChecklistCategories.any { it.equals(trimmed, ignoreCase = true) }
+        viewModelScope.launch {
+            repository.deleteChecklistCategory(trimmed, isDefault, moveItemsTo)
+                .onSuccess {
+                    val msg = if (moveItemsTo != null) {
+                        "Removed \"$trimmed\" (items moved to \"$moveItemsTo\")"
+                    } else {
+                        "Category \"$trimmed\" removed"
+                    }
+                    _uiState.update { it.copy(statusBanner = msg) }
+                }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }
@@ -486,6 +542,43 @@ class TaskViewModel(
                     if (resolvedPhoto.isNotBlank()) {
                         _uiState.update { it.copy(statusBanner = "Photo note saved under \"$category\"") }
                     }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun saveMultipleChecklistPhotos(
+        photosBase64: List<String>,
+        baseTitle: String,
+        quantity: String,
+        category: String,
+        notes: String = "",
+        photoTitles: List<String> = emptyList()
+    ) {
+        if (photosBase64.isEmpty()) return
+        val typedPrefix = baseTitle.trim()
+        val cleanCategory = category.trim().ifBlank { "General Stock" }
+        viewModelScope.launch {
+            val items = photosBase64.mapIndexed { idx, b64 ->
+                val resolvedTitle = when {
+                    typedPrefix.isNotBlank() && photosBase64.size == 1 -> typedPrefix
+                    typedPrefix.isNotBlank() -> "$typedPrefix ${idx + 1}"
+                    else -> photoTitles.getOrNull(idx)?.trim().orEmpty()
+                        .ifBlank { if (photosBase64.size == 1) "Photo Note" else "Photo Note ${idx + 1}" }
+                }
+                ChecklistItem(
+                    title = resolvedTitle,
+                    quantity = quantity.trim(),
+                    category = cleanCategory,
+                    notes = notes.trim(),
+                    imageBase64 = b64
+                )
+            }
+            repository.addChecklistPhotoNotes(items)
+                .onSuccess { count ->
+                    _uiState.update { it.copy(statusBanner = "$count photo notes added to \"$cleanCategory\"") }
                 }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
@@ -670,6 +763,44 @@ class TaskViewModel(
         }
     }
 
+    fun saveMultipleSharedPhotos(
+        photosBase64: List<String>,
+        baseTitle: String,
+        quantity: String,
+        category: String,
+        notes: String = "",
+        photoTitles: List<String> = emptyList()
+    ) {
+        val code = _uiState.value.activeSharedCode ?: return
+        if (photosBase64.isEmpty()) return
+        val typedPrefix = baseTitle.trim()
+        val cleanCategory = category.trim().ifBlank { "Supplies" }
+        viewModelScope.launch {
+            val items = photosBase64.mapIndexed { idx, b64 ->
+                val resolvedTitle = when {
+                    typedPrefix.isNotBlank() && photosBase64.size == 1 -> typedPrefix
+                    typedPrefix.isNotBlank() -> "$typedPrefix ${idx + 1}"
+                    else -> photoTitles.getOrNull(idx)?.trim().orEmpty()
+                        .ifBlank { if (photosBase64.size == 1) "Photo Note" else "Photo Note ${idx + 1}" }
+                }
+                SharedChecklistItem(
+                    title = resolvedTitle,
+                    quantity = quantity.trim(),
+                    category = cleanCategory,
+                    notes = notes.trim(),
+                    imageBase64 = b64
+                )
+            }
+            repository.addSharedPhotoNotes(code, items)
+                .onSuccess { count ->
+                    _uiState.update { it.copy(statusBanner = "$count photo notes synced to live board") }
+                }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
     fun unselectAllSharedPhotos() {
         val code = _uiState.value.activeSharedCode ?: return
         viewModelScope.launch {
@@ -724,6 +855,27 @@ class TaskViewModel(
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
             repository.updateSharedCategories(code, board.categories + trimmed)
+                .onSuccess { _uiState.update { it.copy(statusBanner = "Shared category \"$trimmed\" added") } }
+                .onFailure { t ->
+                    _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
+                }
+        }
+    }
+
+    fun deleteSharedCategory(categoryName: String, moveItemsTo: String? = null) {
+        val code = _uiState.value.activeSharedCode ?: return
+        val trimmed = categoryName.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            repository.deleteSharedCategory(code, trimmed, moveItemsTo)
+                .onSuccess {
+                    val msg = if (moveItemsTo != null) {
+                        "Removed \"$trimmed\" (items moved to \"$moveItemsTo\")"
+                    } else {
+                        "Shared category \"$trimmed\" removed"
+                    }
+                    _uiState.update { it.copy(statusBanner = msg) }
+                }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }
                 }

@@ -7,7 +7,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.ChecklistItem
 import com.example.data.model.HouseArea
@@ -104,7 +107,7 @@ class ScreenCompositionTest {
         val encoded = com.example.ui.components.ImageUtils.encodeToBase64(tinyBitmap)
 
         val (baseState, vm) = makeStateAndVm()
-        val photoItem = ChecklistItem(
+        val photoItem1 = ChecklistItem(
             id = "photo1",
             title = "Front Fridge Photo",
             quantity = "Need 2 cases",
@@ -112,12 +115,31 @@ class ScreenCompositionTest {
             isChecked = false,
             imageBase64 = encoded
         )
+        val photoItem2 = ChecklistItem(
+            id = "photo2",
+            title = "Side Cooler Photo",
+            quantity = "1 tray",
+            category = "Beverages",
+            isChecked = false,
+            imageBase64 = encoded
+        )
+        val textItem = ChecklistItem(
+            id = "text1",
+            title = "Sparkling Water",
+            quantity = "6 packs",
+            category = "Beverages",
+            isChecked = false
+        )
         var selectedState by mutableStateOf(false)
         var clickCount = 0
 
         composeRule.setContent {
             ShopKeepTheme {
-                val dynamicItems = listOf(photoItem.copy(isChecked = selectedState))
+                val dynamicItems = listOf(
+                    photoItem1.copy(isChecked = selectedState),
+                    photoItem2,
+                    textItem
+                )
                 ChecklistScreen(
                     uiState = baseState.copy(checklistItems = dynamicItems),
                     viewModel = vm
@@ -126,19 +148,75 @@ class ScreenCompositionTest {
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("add_photo_note_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("edit_categories_button").assertIsDisplayed()
         composeRule.onNodeWithTag("photo_note_card_photo1").assertIsDisplayed()
         composeRule.onNodeWithTag("photo_select_circle_photo1").assertIsDisplayed()
         composeRule.onNodeWithTag("photo_select_circle_photo1").performClick()
 
-        // Verify selected state renders summary + Unselect All button and toggles back off
+        // Verify selected state renders summary + Unselect All button AND moves photo1 to bottom "Marked (1)" section
         selectedState = true
         clickCount++
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("unselect_all_photos_button").assertIsDisplayed()
+        composeRule.onNodeWithText("Marked (1)").performScrollTo()
+        composeRule.onNodeWithText("Marked (1)").assertIsDisplayed()
+        composeRule.onNodeWithTag("photo_note_card_photo1").assertExists()
+        val markedLabelTop = composeRule.onNodeWithText("Marked (1)")
+            .fetchSemanticsNode().boundsInRoot.top
+        val textItemTop = composeRule.onNodeWithText("Sparkling Water")
+            .fetchSemanticsNode().boundsInRoot.top
+        org.junit.Assert.assertTrue(
+            "Marked section ($markedLabelTop) must sit below text item ($textItemTop)",
+            markedLabelTop > textItemTop
+        )
 
+        // Unmarking removes "Marked (1)" and moves photo1 back up alongside unmarked photo2
         selectedState = false
         composeRule.waitForIdle()
+        composeRule.onNodeWithText("Marked (1)").assertDoesNotExist()
+        composeRule.onNodeWithTag("photo_note_card_photo1").performScrollTo()
+        composeRule.onNodeWithTag("photo_note_card_photo1").assertIsDisplayed()
+        val restoredPhotoTop = composeRule.onNodeWithTag("photo_note_card_photo1")
+            .fetchSemanticsNode().boundsInRoot.top
+        val photo2TopAfterRestore = composeRule.onNodeWithTag("photo_note_card_photo2")
+            .fetchSemanticsNode().boundsInRoot.top
+        org.junit.Assert.assertEquals(photo2TopAfterRestore, restoredPhotoTop, 1f)
         org.junit.Assert.assertEquals(1, clickCount)
+
+        // Scroll back up to the compact header, open Edit Categories dialog and verify rename UI
+        composeRule.onNodeWithTag("personal_checklist_list").performScrollToIndex(0)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("edit_categories_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("edit_categories_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("manage_new_category_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("manage_rename_category_Beverages").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("manage_rename_input").assertIsDisplayed()
+    }
+
+    @Test
+    fun categoryPhotoOrdering_movesMarkedPhotosToBottom() {
+        val personal = com.example.ui.checklist.orderPersonalCategoryItems(
+            listOf(
+                ChecklistItem(id = "p1", title = "Photo A", isChecked = true, imageBase64 = "abc", updatedAt = 200L),
+                ChecklistItem(id = "p2", title = "Photo B", isChecked = false, imageBase64 = "def", updatedAt = 50L),
+                ChecklistItem(id = "t1", title = "Milk", isChecked = false),
+                ChecklistItem(id = "p3", title = "Photo C", isChecked = true, imageBase64 = "ghi", updatedAt = 100L)
+            )
+        )
+        org.junit.Assert.assertEquals(listOf("p2"), personal.unmarkedPhotos.map { it.id })
+        org.junit.Assert.assertEquals(listOf("t1"), personal.orderedText.map { it.id })
+        org.junit.Assert.assertEquals(listOf("p3", "p1"), personal.markedPhotos.map { it.id })
+
+        val shared = com.example.ui.checklist.orderSharedCategoryItems(
+            listOf(
+                SharedChecklistItem(id = "sp1", title = "Shared A", isChecked = true, imageBase64 = "abc", updatedAt = 300L),
+                SharedChecklistItem(id = "sp2", title = "Shared B", isChecked = false, imageBase64 = "def", updatedAt = 10L)
+            )
+        )
+        org.junit.Assert.assertEquals(listOf("sp2"), shared.unmarkedPhotos.map { it.id })
+        org.junit.Assert.assertEquals(listOf("sp1"), shared.markedPhotos.map { it.id })
     }
 
     @Test
@@ -160,4 +238,129 @@ class ScreenCompositionTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("copy_web_url_button").assertIsDisplayed()
     }
+
+    @Test
+    fun multiPhotoUploadDialog_andPhotosGrid_composeCleanly() {
+        val tinyBitmap = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+        val encoded = com.example.ui.components.ImageUtils.encodeToBase64(tinyBitmap)
+        val drafts = listOf(
+            com.example.ui.checklist.DraftMultiPhoto(id = "d1", base64 = encoded),
+            com.example.ui.checklist.DraftMultiPhoto(id = "d2", base64 = encoded),
+            com.example.ui.checklist.DraftMultiPhoto(id = "d3", base64 = encoded)
+        )
+        val (baseState, vm) = makeStateAndVm()
+        val stateWithPhotos = baseState.copy(
+            photos = listOf(
+                com.example.data.model.AreaPhoto(id = "ap1", title = "Aisle 1", category = "Display Shelves", imageBase64 = encoded),
+                com.example.data.model.AreaPhoto(id = "ap2", title = "Aisle 2", category = "Display Shelves", imageBase64 = encoded)
+            )
+        )
+
+        composeRule.setContent {
+            ShopKeepTheme {
+                PhotosScreen(uiState = stateWithPhotos, viewModel = vm)
+                com.example.ui.checklist.MultiPhotoUploadDialog(
+                    title = "Add Photo Notes",
+                    photos = drafts,
+                    availableCategories = listOf("Beverages", "Snacks"),
+                    initialCategory = "Beverages",
+                    onAddMoreClick = {},
+                    onRemovePhoto = {},
+                    onSaveAll = { _, _, _, _ -> },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("photos_grid").assertExists()
+        composeRule.onNodeWithTag("multi_photo_add_more_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("multi_photo_category_input").assertIsDisplayed()
+        composeRule.onNodeWithTag("confirm_save_multi_photos_button").assertIsDisplayed()
+        composeRule.onNodeWithText("Save All (3)").assertIsDisplayed()
+    }
+
+    @Test
+    fun deviceAlbumBrowser_sortsAlbumsAndPhotosAlphabetically_andFiltersByName() {
+        val photos = listOf(
+            com.example.ui.components.PickerPhotoItem(id = "1", displayName = "Zebra Gum", albumName = "Snacks", lastModified = 10L),
+            com.example.ui.components.PickerPhotoItem(id = "2", displayName = "Apple Juice", albumName = "Beverages", lastModified = 30L),
+            com.example.ui.components.PickerPhotoItem(id = "3", displayName = "Cola Can", albumName = "Beverages", lastModified = 20L),
+            com.example.ui.components.PickerPhotoItem(id = "4", displayName = "Almond Milk", albumName = "Dairy", lastModified = 40L)
+        )
+        val albums = com.example.ui.components.DeviceAlbumBrowser.buildSortedAlbumSummaries(photos)
+        org.junit.Assert.assertEquals(listOf("Beverages", "Dairy", "Snacks"), albums.map { it.name })
+
+        val beveragesSorted = com.example.ui.components.DeviceAlbumBrowser.filterAndSortPickerPhotos(
+            photos = photos,
+            selectedAlbum = "Beverages",
+            searchQuery = "",
+            sortOrder = com.example.ui.components.PhotoPickerSortOrder.NAME_ASC
+        )
+        org.junit.Assert.assertEquals(listOf("Apple Juice", "Cola Can"), beveragesSorted.map { it.displayName })
+
+        val searched = com.example.ui.components.DeviceAlbumBrowser.filterAndSortPickerPhotos(
+            photos = photos,
+            selectedAlbum = null,
+            searchQuery = "cola",
+            sortOrder = com.example.ui.components.PhotoPickerSortOrder.NAME_ASC
+        )
+        org.junit.Assert.assertEquals(listOf("Cola Can"), searched.map { it.displayName })
+    }
+
+    @Test
+    fun smartPhotoSourceDialog_supportsSearchByName_andAlphabeticalAlbumSelection() {
+        val tinyBitmap = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+        val encoded = com.example.ui.components.ImageUtils.encodeToBase64(tinyBitmap)
+        val savedPhotos = listOf(
+            com.example.data.model.AreaPhoto(id = "p1", title = "Zebra Bar", category = "Snacks", imageBase64 = encoded),
+            com.example.data.model.AreaPhoto(id = "p2", title = "Coke Zero", category = "Beverages", imageBase64 = encoded),
+            com.example.data.model.AreaPhoto(id = "p3", title = "Apple Soda", category = "Beverages", imageBase64 = encoded)
+        )
+        var pickedCount = 0
+
+        composeRule.setContent {
+            ShopKeepTheme {
+                com.example.ui.checklist.SmartPhotoSourceDialog(
+                    savedAreaPhotos = savedPhotos,
+                    onOpenFileSearchPicker = {},
+                    onOpenGalleryPicker = {},
+                    onLaunchLinkAlbumFolder = {},
+                    onConfirmPickedPhotos = { pickedCount = it.size },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("picker_search_files_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("picker_gallery_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("picker_link_album_folder_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("photo_picker_search_input").assertIsDisplayed()
+
+        // Switch to Albums A-Z tab and verify Beverages appears before Snacks
+        composeRule.onNodeWithTag("picker_tab_albums").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("album_row_Beverages").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("album_row_Snacks").performScrollTo().assertIsDisplayed()
+        val bevTop = composeRule.onNodeWithTag("album_row_Beverages").fetchSemanticsNode().boundsInRoot.top
+        val snacksTop = composeRule.onNodeWithTag("album_row_Snacks").fetchSemanticsNode().boundsInRoot.top
+        org.junit.Assert.assertTrue("Beverages ($bevTop) must appear before Snacks ($snacksTop)", bevTop < snacksTop)
+
+        // Tap Beverages album and verify Apple Soda appears before Coke Zero (alphabetical A-Z)
+        composeRule.onNodeWithTag("album_row_Beverages").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("picker_photo_card_shop_p3").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("picker_photo_card_shop_p2").performScrollTo().assertIsDisplayed()
+        val appleTop = composeRule.onNodeWithTag("picker_photo_card_shop_p3").fetchSemanticsNode().boundsInRoot.top
+        val appleLeft = composeRule.onNodeWithTag("picker_photo_card_shop_p3").fetchSemanticsNode().boundsInRoot.left
+        val cokeLeft = composeRule.onNodeWithTag("picker_photo_card_shop_p2").fetchSemanticsNode().boundsInRoot.left
+        org.junit.Assert.assertTrue("Apple Soda must be placed first in alphabetical 2-col grid", appleLeft < cokeLeft && appleTop >= 0f)
+
+        // Select a photo and confirm
+        composeRule.onNodeWithTag("picker_photo_card_shop_p3").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("confirm_pick_selected_photos_button").performClick()
+        org.junit.Assert.assertEquals(1, pickedCount)
+    }
 }
+
+

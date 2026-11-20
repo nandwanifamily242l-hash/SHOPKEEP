@@ -269,6 +269,35 @@ class TaskRepository(
         id
     }
 
+    suspend fun addAreaPhotos(photos: List<AreaPhoto>): Result<Int> = runCatching {
+        val uid = requireUid()
+        if (photos.isEmpty()) return@runCatching 0
+        val baseTime = System.currentTimeMillis()
+        var savedCount = 0
+        photos.chunked(5).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { photo ->
+                val id = photo.id.ifBlank { UUID.randomUUID().toString() }
+                val ts = baseTime + savedCount
+                val payload = mapOf(
+                    "title" to photo.title.trim().ifBlank { "Shop Photo" },
+                    "category" to photo.category.trim().ifBlank { "Display Shelves" },
+                    "notes" to photo.notes.trim(),
+                    "imageUri" to photo.imageUri,
+                    "imageBase64" to photo.imageBase64,
+                    "mediaType" to photo.mediaType,
+                    "createdAt" to ts,
+                    "updatedAt" to ts,
+                    "userId" to uid
+                )
+                batch.set(photosCol(uid).document(id), payload)
+                savedCount++
+            }
+            batch.commit().await()
+        }
+        savedCount
+    }
+
     suspend fun deletePhoto(photoId: String): Result<Unit> = runCatching {
         val uid = requireUid()
         photosCol(uid).document(photoId).delete().await()
@@ -330,6 +359,37 @@ class TaskRepository(
         id
     }
 
+    suspend fun addChecklistPhotoNotes(items: List<ChecklistItem>): Result<Int> = runCatching {
+        val uid = requireUid()
+        if (items.isEmpty()) return@runCatching 0
+        val baseTime = System.currentTimeMillis()
+        var savedCount = 0
+        items.chunked(5).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { item ->
+                val id = item.id.ifBlank { UUID.randomUUID().toString() }
+                val ts = baseTime + savedCount
+                val payload = mapOf(
+                    "title" to item.title.trim().ifBlank { "Photo Note" },
+                    "quantity" to item.quantity.trim(),
+                    "category" to item.category.trim().ifBlank { "General Stock" },
+                    "notes" to item.notes.trim(),
+                    "isChecked" to item.isChecked,
+                    "isDeleted" to false,
+                    "imageBase64" to item.imageBase64,
+                    "orderIndex" to item.orderIndex,
+                    "createdAt" to ts,
+                    "updatedAt" to ts,
+                    "userId" to uid
+                )
+                batch.set(checklistItemsCol(uid).document(id), payload)
+                savedCount++
+            }
+            batch.commit().await()
+        }
+        savedCount
+    }
+
     suspend fun deleteChecklistItem(itemId: String, permanent: Boolean = false): Result<Unit> = runCatching {
         val uid = requireUid()
         if (permanent) {
@@ -371,15 +431,22 @@ class TaskRepository(
 
     suspend fun upsertChecklistCategory(category: ChecklistCategory): Result<String> = runCatching {
         val uid = requireUid()
-        val id = category.id.ifBlank { categoryKey(category.name) }
+        val trimmed = category.name.trim()
+        require(trimmed.isNotEmpty()) { "Category name cannot be empty" }
+        val id = category.id.ifBlank { categoryKey(trimmed) }
         val payload = mapOf(
-            "name" to category.name.trim(),
+            "name" to trimmed,
             "isHidden" to category.isHidden,
             "sortOrder" to category.sortOrder,
             "createdAt" to if (category.id.isBlank()) System.currentTimeMillis() else category.createdAt,
             "userId" to uid
         )
         checklistCatsCol(uid).document(id).set(payload, SetOptions.merge()).await()
+        if (!category.isHidden) {
+            runCatching {
+                checklistCatsCol(uid).document("hidden_${categoryKey(trimmed)}").delete().await()
+            }
+        }
         id
     }
 
@@ -389,27 +456,43 @@ class TaskRepository(
         isDefaultCategory: Boolean
     ): Result<Unit> = runCatching {
         val uid = requireUid()
+        val trimmedOld = oldName.trim()
         val trimmedNew = newName.trim()
         require(trimmedNew.isNotEmpty()) { "Category name cannot be empty" }
-        val itemsSnap = checklistItemsCol(uid).whereEqualTo("category", oldName).get().await()
-        val catsSnap = checklistCatsCol(uid).whereEqualTo("name", oldName).get().await()
-        val batch = firestore.batch()
+
+        val allItemsSnap = checklistItemsCol(uid).get().await()
+        val matchingItems = allItemsSnap.documents.filter { doc ->
+            doc.getString("category")?.trim()?.equals(trimmedOld, ignoreCase = true) == true
+        }
+        val allCatsSnap = checklistCatsCol(uid).get().await()
+        val matchingCats = allCatsSnap.documents.filter { doc ->
+            val catName = doc.getString("name")?.trim() ?: ""
+            val isHiddenFlag = doc.getBoolean("isHidden") == true
+            !isHiddenFlag && catName.equals(trimmedOld, ignoreCase = true)
+        }
+
         val now = System.currentTimeMillis()
-
-        itemsSnap.documents.forEach { doc ->
-            batch.update(doc.reference, mapOf("category" to trimmedNew, "updatedAt" to now))
+        matchingItems.chunked(350).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { doc ->
+                batch.update(doc.reference, mapOf("category" to trimmedNew, "updatedAt" to now))
+            }
+            batch.commit().await()
         }
 
-        catsSnap.documents.forEach { doc ->
-            batch.delete(doc.reference)
+        val catBatch = firestore.batch()
+        matchingCats.forEach { doc ->
+            catBatch.delete(doc.reference)
         }
+        // Clear any old hidden marker for the target category name so it stays visible
+        catBatch.delete(checklistCatsCol(uid).document("hidden_${categoryKey(trimmedNew)}"))
 
-        if (isDefaultCategory) {
-            val hiddenOldRef = checklistCatsCol(uid).document("hidden_${categoryKey(oldName)}")
-            batch.set(
+        if (isDefaultCategory && !trimmedOld.equals(trimmedNew, ignoreCase = true)) {
+            val hiddenOldRef = checklistCatsCol(uid).document("hidden_${categoryKey(trimmedOld)}")
+            catBatch.set(
                 hiddenOldRef,
                 mapOf(
-                    "name" to oldName,
+                    "name" to trimmedOld,
                     "isHidden" to true,
                     "sortOrder" to 0,
                     "createdAt" to now,
@@ -419,7 +502,7 @@ class TaskRepository(
         }
 
         val newCatRef = checklistCatsCol(uid).document(categoryKey(trimmedNew))
-        batch.set(
+        catBatch.set(
             newCatRef,
             mapOf(
                 "name" to trimmedNew,
@@ -429,7 +512,62 @@ class TaskRepository(
                 "userId" to uid
             )
         )
-        batch.commit().await()
+        catBatch.commit().await()
+    }
+
+    suspend fun deleteChecklistCategory(
+        categoryName: String,
+        isDefaultCategory: Boolean,
+        moveItemsTo: String? = null
+    ): Result<Unit> = runCatching {
+        val uid = requireUid()
+        val trimmed = categoryName.trim()
+        require(trimmed.isNotEmpty()) { "Category name cannot be empty" }
+
+        val allItemsSnap = checklistItemsCol(uid).get().await()
+        val matchingItems = allItemsSnap.documents.filter { doc ->
+            doc.getString("category")?.trim()?.equals(trimmed, ignoreCase = true) == true &&
+                doc.getBoolean("isDeleted") != true
+        }
+        val now = System.currentTimeMillis()
+        val targetCategory = moveItemsTo?.trim()?.takeIf { it.isNotEmpty() }
+
+        matchingItems.chunked(350).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { doc ->
+                if (targetCategory != null) {
+                    batch.update(doc.reference, mapOf("category" to targetCategory, "updatedAt" to now))
+                } else {
+                    batch.update(doc.reference, mapOf("isDeleted" to true, "updatedAt" to now))
+                }
+            }
+            batch.commit().await()
+        }
+
+        val allCatsSnap = checklistCatsCol(uid).get().await()
+        val matchingCats = allCatsSnap.documents.filter { doc ->
+            doc.getString("name")?.trim()?.equals(trimmed, ignoreCase = true) == true &&
+                doc.getBoolean("isHidden") != true
+        }
+
+        val catBatch = firestore.batch()
+        matchingCats.forEach { doc -> catBatch.delete(doc.reference) }
+        if (isDefaultCategory) {
+            catBatch.set(
+                checklistCatsCol(uid).document("hidden_${categoryKey(trimmed)}"),
+                mapOf(
+                    "name" to trimmed,
+                    "isHidden" to true,
+                    "sortOrder" to 0,
+                    "createdAt" to now,
+                    "userId" to uid
+                )
+            )
+        }
+        if (targetCategory != null) {
+            catBatch.delete(checklistCatsCol(uid).document("hidden_${categoryKey(targetCategory)}"))
+        }
+        catBatch.commit().await()
     }
 
     // --- SHARED COLLABORATIVE CHECKLISTS ---
@@ -689,6 +827,39 @@ class TaskRepository(
         id
     }
 
+    suspend fun addSharedPhotoNotes(shareCode: String, items: List<SharedChecklistItem>): Result<Int> = runCatching {
+        val user = auth.currentUser ?: throw IllegalStateException("Not authenticated")
+        val code = shareCode.trim().uppercase()
+        if (items.isEmpty()) return@runCatching 0
+        val baseTime = System.currentTimeMillis()
+        val boardRef = sharedChecklistsCol().document(code)
+        var savedCount = 0
+        items.chunked(5).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { item ->
+                val id = item.id.ifBlank { UUID.randomUUID().toString() }
+                val ts = baseTime + savedCount
+                val payload = mapOf(
+                    "title" to item.title.trim().ifBlank { "Photo Note" },
+                    "quantity" to item.quantity.trim(),
+                    "category" to item.category.trim().ifBlank { "Supplies" },
+                    "notes" to item.notes.trim(),
+                    "isChecked" to item.isChecked,
+                    "imageBase64" to item.imageBase64,
+                    "addedByUid" to user.uid,
+                    "addedByName" to (user.displayName ?: "Shop Owner"),
+                    "createdAt" to ts,
+                    "updatedAt" to ts
+                )
+                batch.set(boardRef.collection("items").document(id), payload)
+                savedCount++
+            }
+            batch.commit().await()
+        }
+        boardRef.update("updatedAt", baseTime + savedCount).await()
+        savedCount
+    }
+
     suspend fun deleteSharedItem(shareCode: String, itemId: String): Result<Unit> = runCatching {
         requireUid()
         val code = shareCode.trim().uppercase()
@@ -702,30 +873,83 @@ class TaskRepository(
     ): Result<Unit> = runCatching {
         requireUid()
         val code = shareCode.trim().uppercase()
+        val trimmedOld = oldName.trim()
         val trimmedNew = newName.trim()
         require(trimmedNew.isNotEmpty()) { "Category name cannot be empty" }
         val boardRef = sharedChecklistsCol().document(code)
         val boardSnap = boardRef.get().await()
         val board = boardSnap.toObjectSafe<SharedChecklist>()
             ?: throw NoSuchElementException("Shared checklist not found")
-        val updatedCats = board.categories.map { if (it == oldName) trimmedNew else it }
-            .let { if (trimmedNew !in it) it + trimmedNew else it }
-            .distinct()
-        val itemsSnap = boardRef.collection("items").whereEqualTo("category", oldName).get().await()
-        val batch = firestore.batch()
-        val now = System.currentTimeMillis()
-        batch.update(boardRef, mapOf("categories" to updatedCats, "updatedAt" to now))
-        itemsSnap.documents.forEach { doc ->
-            batch.update(doc.reference, mapOf("category" to trimmedNew, "updatedAt" to now))
+        val updatedCats = board.categories
+            .map { if (it.trim().equals(trimmedOld, ignoreCase = true)) trimmedNew else it.trim() }
+            .let { if (it.none { c -> c.equals(trimmedNew, ignoreCase = true) }) it + trimmedNew else it }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+        val allItemsSnap = boardRef.collection("items").get().await()
+        val matchingItems = allItemsSnap.documents.filter { doc ->
+            doc.getString("category")?.trim()?.equals(trimmedOld, ignoreCase = true) == true
         }
-        batch.commit().await()
+        val now = System.currentTimeMillis()
+        boardRef.update(mapOf("categories" to updatedCats, "updatedAt" to now)).await()
+        matchingItems.chunked(350).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { doc ->
+                batch.update(doc.reference, mapOf("category" to trimmedNew, "updatedAt" to now))
+            }
+            batch.commit().await()
+        }
+    }
+
+    suspend fun deleteSharedCategory(
+        shareCode: String,
+        categoryName: String,
+        moveItemsTo: String? = null
+    ): Result<Unit> = runCatching {
+        requireUid()
+        val code = shareCode.trim().uppercase()
+        val trimmed = categoryName.trim()
+        require(trimmed.isNotEmpty()) { "Category name cannot be empty" }
+        val boardRef = sharedChecklistsCol().document(code)
+        val boardSnap = boardRef.get().await()
+        val board = boardSnap.toObjectSafe<SharedChecklist>()
+            ?: throw NoSuchElementException("Shared checklist not found")
+        val targetCategory = moveItemsTo?.trim()?.takeIf { it.isNotEmpty() }
+        val updatedCats = board.categories
+            .filterNot { it.trim().equals(trimmed, ignoreCase = true) }
+            .let { list ->
+                if (targetCategory != null && list.none { it.equals(targetCategory, ignoreCase = true) }) {
+                    list + targetCategory
+                } else {
+                    list
+                }
+            }
+            .distinctBy { it.lowercase() }
+
+        val allItemsSnap = boardRef.collection("items").get().await()
+        val matchingItems = allItemsSnap.documents.filter { doc ->
+            doc.getString("category")?.trim()?.equals(trimmed, ignoreCase = true) == true
+        }
+        val now = System.currentTimeMillis()
+        boardRef.update(mapOf("categories" to updatedCats, "updatedAt" to now)).await()
+        matchingItems.chunked(350).forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { doc ->
+                if (targetCategory != null) {
+                    batch.update(doc.reference, mapOf("category" to targetCategory, "updatedAt" to now))
+                } else {
+                    batch.delete(doc.reference)
+                }
+            }
+            batch.commit().await()
+        }
     }
 
     suspend fun updateSharedCategories(shareCode: String, categories: List<String>): Result<Unit> = runCatching {
         requireUid()
         val code = shareCode.trim().uppercase()
+        val cleaned = categories.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
         sharedChecklistsCol().document(code).update(
-            mapOf("categories" to categories.distinct(), "updatedAt" to System.currentTimeMillis())
+            mapOf("categories" to cleaned, "updatedAt" to System.currentTimeMillis())
         ).await()
     }
 

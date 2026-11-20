@@ -76,6 +76,10 @@
                 <data
                     android:host="gen-lang-client-0080616262.firebaseapp.com"
                     android:scheme="https" />
+                <data
+                    android:host="nandwanifamily242l-hash.github.io"
+                    android:pathPrefix="/SHOPKEEP"
+                    android:scheme="https" />
             </intent-filter>
         </activity>
 

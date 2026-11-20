@@ -44,15 +44,22 @@ const emptyDesc = document.getElementById("emptyDesc");
 const boardTitle = document.getElementById("boardTitle");
 const boardMeta = document.getElementById("boardMeta");
 const categoriesContainer = document.getElementById("categoriesContainer");
+const categoryFilterBar = document.getElementById("categoryFilterBar");
+const viewCategoriesBtn = document.getElementById("viewCategoriesBtn");
+const viewAllGridBtn = document.getElementById("viewAllGridBtn");
+const densityStandardBtn = document.getElementById("densityStandardBtn");
+const densityCompactBtn = document.getElementById("densityCompactBtn");
 const addItemForm = document.getElementById("addItemForm");
 const itemPhotoInput = document.getElementById("itemPhotoInput");
 const attachPhotoBtn = document.getElementById("attachPhotoBtn");
 const draftPhotoPreview = document.getElementById("draftPhotoPreview");
 const draftPhotoImg = document.getElementById("draftPhotoImg");
+const draftPhotoLabel = document.getElementById("draftPhotoLabel");
 const clearDraftPhotoBtn = document.getElementById("clearDraftPhotoBtn");
 const photoLightbox = document.getElementById("photoLightbox");
 const lightboxImg = document.getElementById("lightboxImg");
 const lightboxTitle = document.getElementById("lightboxTitle");
+const toggleLightboxBtn = document.getElementById("toggleLightboxBtn");
 const closeLightboxBtn = document.getElementById("closeLightboxBtn");
 const signInBtn = document.getElementById("signInBtn");
 const signOutBtn = document.getElementById("signOutBtn");
@@ -65,7 +72,39 @@ let unsubDefault = null;
 let unsubBoard = null;
 let unsubItems = null;
 let activeCode = null;
-let draftPhotoBase64 = "";
+let draftPhotos = [];
+let lightboxCurrentItemId = null;
+let viewMode = "categories"; // "categories" | "all-grid"
+let gridDensity = "standard"; // "standard" | "compact"
+let selectedCategoryFilter = "ALL";
+
+function isItemChecked(item) {
+  return Boolean(item && (item.isChecked === true || item.checked === true));
+}
+
+function toMillis(val) {
+  if (typeof val === "number" && Number.isFinite(val)) return val;
+  if (val && typeof val.toMillis === "function") return val.toMillis();
+  if (typeof val === "string") {
+    const parsed = Number(val);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function hasPhoto(item) {
+  const b64 = (item.imageBase64 || "").trim();
+  const url = (item.imageUrl || "").trim();
+  return b64.length > 0 || url.length > 0;
+}
+
+function resolvePhotoSrc(item) {
+  const rawB64 = (item.imageBase64 || "").trim();
+  if (rawB64.length > 0) {
+    return rawB64.startsWith("data:") ? rawB64 : `data:image/jpeg;base64,${rawB64}`;
+  }
+  return (item.imageUrl || "").trim();
+}
 
 function canToggleChecklist() {
   if (canManageStock()) return true;
@@ -80,8 +119,43 @@ function canManageStock() {
   return currentBoardData.ownerId === currentUser.uid || members.includes(currentUser.uid);
 }
 
+function updateToolbarButtons() {
+  if (viewCategoriesBtn) viewCategoriesBtn.classList.toggle("active", viewMode === "categories");
+  if (viewAllGridBtn) viewAllGridBtn.classList.toggle("active", viewMode === "all-grid");
+  if (densityStandardBtn) densityStandardBtn.classList.toggle("active", gridDensity === "standard");
+  if (densityCompactBtn) densityCompactBtn.classList.toggle("active", gridDensity === "compact");
+}
+
+if (viewCategoriesBtn) {
+  viewCategoriesBtn.addEventListener("click", () => {
+    viewMode = "categories";
+    updateToolbarButtons();
+    if (latestItemsSnap) renderItems(latestItemsSnap);
+  });
+}
+if (viewAllGridBtn) {
+  viewAllGridBtn.addEventListener("click", () => {
+    viewMode = "all-grid";
+    updateToolbarButtons();
+    if (latestItemsSnap) renderItems(latestItemsSnap);
+  });
+}
+if (densityStandardBtn) {
+  densityStandardBtn.addEventListener("click", () => {
+    gridDensity = "standard";
+    updateToolbarButtons();
+    if (latestItemsSnap) renderItems(latestItemsSnap);
+  });
+}
+if (densityCompactBtn) {
+  densityCompactBtn.addEventListener("click", () => {
+    gridDensity = "compact";
+    updateToolbarButtons();
+    if (latestItemsSnap) renderItems(latestItemsSnap);
+  });
+}
+
 function refreshAccessUi() {
-  const canToggle = canToggleChecklist();
   const canManage = canManageStock();
   const restricted = currentBoardData && currentBoardData.isPublicEditable === false;
 
@@ -136,178 +210,361 @@ signInBtn.addEventListener("click", async () => {
 
 signOutBtn.addEventListener("click", () => signOut(auth));
 
+function buildPhotoGridElement(list, { showCategoryBadge = false, canToggle, canManage }) {
+  const grid = document.createElement("div");
+  grid.className = `photo-notes-grid${gridDensity === "compact" ? " compact" : ""}`;
+
+  list.forEach((item) => {
+    const checked = isItemChecked(item);
+    const pCard = document.createElement("div");
+    pCard.className = `photo-note-card ${checked ? "checked" : ""}`;
+
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "photo-note-thumb-wrap";
+    const img = document.createElement("img");
+    img.src = resolvePhotoSrc(item);
+    img.alt = item.title || "Photo Note";
+    img.loading = "lazy";
+    img.style.cursor = "pointer";
+    img.addEventListener("click", () => {
+      if (photoLightbox && lightboxImg && lightboxTitle) {
+        lightboxImg.src = img.src;
+        lightboxTitle.textContent = item.title || "Photo Note";
+        lightboxCurrentItemId = item.id;
+        if (toggleLightboxBtn) {
+          if (canToggleChecklist()) {
+            toggleLightboxBtn.classList.remove("hidden");
+            toggleLightboxBtn.textContent = checked ? "Unmark" : "Mark";
+          } else {
+            toggleLightboxBtn.classList.add("hidden");
+          }
+        }
+        photoLightbox.classList.remove("hidden");
+      }
+    });
+    thumbWrap.appendChild(img);
+
+    const circleBtn = document.createElement("button");
+    circleBtn.type = "button";
+    circleBtn.className = "photo-select-circle";
+    circleBtn.title = checked ? "Unselect photo note" : "Select photo note";
+    circleBtn.textContent = checked ? "✓" : "";
+    circleBtn.disabled = !canToggle;
+    circleBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!canToggleChecklist()) return;
+      circleBtn.disabled = true;
+      try {
+        await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
+          isChecked: !checked,
+          updatedAt: Date.now()
+        });
+      } catch (err) {
+        circleBtn.disabled = false;
+        alert("Could not update photo note: " + (err?.message || "Permission denied"));
+      }
+    });
+    thumbWrap.appendChild(circleBtn);
+
+    if (showCategoryBadge && item.category) {
+      const badge = document.createElement("span");
+      badge.className = "photo-cat-badge";
+      badge.textContent = item.category;
+      thumbWrap.appendChild(badge);
+    }
+
+    pCard.appendChild(thumbWrap);
+
+    const footer = document.createElement("div");
+    footer.className = "photo-note-footer";
+    const titleSpan = document.createElement("span");
+    titleSpan.className = "photo-note-title";
+    titleSpan.textContent = item.quantity
+      ? `${item.title || "Photo Note"} • ${item.quantity}`
+      : (item.title || "Photo Note");
+    footer.appendChild(titleSpan);
+
+    if (canManage) {
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "btn-icon";
+      delBtn.title = "Remove photo note";
+      delBtn.textContent = "×";
+      delBtn.addEventListener("click", async () => {
+        if (!canManageStock()) return;
+        try {
+          await deleteDoc(doc(db, "shared_checklists", activeCode, "items", item.id));
+        } catch (err) {
+          alert("Could not remove item: " + (err?.message || "Permission denied"));
+        }
+      });
+      footer.appendChild(delBtn);
+    }
+
+    pCard.appendChild(footer);
+    grid.appendChild(pCard);
+  });
+
+  return grid;
+}
+
+function buildTextItemRow(item, { canToggle, canManage, showCategoryTag = false }) {
+  const checked = isItemChecked(item);
+  const row = document.createElement("div");
+  row.className = `item-row ${checked ? "checked" : ""}`;
+
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = checked;
+  cb.disabled = !canToggle;
+  cb.addEventListener("change", async () => {
+    if (!canToggleChecklist()) return;
+    try {
+      await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
+        isChecked: cb.checked,
+        updatedAt: Date.now()
+      });
+    } catch (err) {
+      cb.checked = !cb.checked;
+      alert("Could not update item: " + (err?.message || "Permission denied"));
+    }
+  });
+
+  const span = document.createElement("span");
+  span.className = "item-label";
+  span.textContent = showCategoryTag && item.category
+    ? `${item.title} (${item.category})`
+    : item.title;
+  span.addEventListener("click", () => {
+    if (!cb.disabled) cb.click();
+  });
+
+  row.appendChild(cb);
+  row.appendChild(span);
+
+  if (item.quantity) {
+    const pill = document.createElement("span");
+    pill.className = "qty-pill";
+    pill.textContent = item.quantity;
+    row.appendChild(pill);
+  }
+
+  if (canManage) {
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-icon";
+    delBtn.title = "Remove item";
+    delBtn.textContent = "×";
+    delBtn.addEventListener("click", async () => {
+      if (!canManageStock()) return;
+      try {
+        await deleteDoc(doc(db, "shared_checklists", activeCode, "items", item.id));
+      } catch (err) {
+        alert("Could not remove item: " + (err?.message || "Permission denied"));
+      }
+    });
+    row.appendChild(delBtn);
+  }
+
+  return row;
+}
+
+function renderCategoryFilterChips(sortedCats) {
+  if (!categoryFilterBar) return;
+  if (sortedCats.length <= 1) {
+    categoryFilterBar.classList.add("hidden");
+    categoryFilterBar.innerHTML = "";
+    selectedCategoryFilter = "ALL";
+    return;
+  }
+  if (selectedCategoryFilter !== "ALL" && !sortedCats.includes(selectedCategoryFilter)) {
+    selectedCategoryFilter = "ALL";
+  }
+
+  categoryFilterBar.classList.remove("hidden");
+  categoryFilterBar.innerHTML = "";
+
+  const allChip = document.createElement("button");
+  allChip.type = "button";
+  allChip.className = `cat-chip ${selectedCategoryFilter === "ALL" ? "active" : ""}`;
+  allChip.textContent = `All (${sortedCats.length})`;
+  allChip.addEventListener("click", () => {
+    selectedCategoryFilter = "ALL";
+    if (latestItemsSnap) renderItems(latestItemsSnap);
+  });
+  categoryFilterBar.appendChild(allChip);
+
+  sortedCats.forEach((cat) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `cat-chip ${selectedCategoryFilter === cat ? "active" : ""}`;
+    chip.textContent = cat;
+    chip.addEventListener("click", () => {
+      selectedCategoryFilter = cat;
+      if (latestItemsSnap) renderItems(latestItemsSnap);
+    });
+    categoryFilterBar.appendChild(chip);
+  });
+}
+
 function renderItems(snap) {
+  const allItems = [];
   const grouped = new Map();
   let totalCount = 0;
   let pendingCount = 0;
 
   snap.forEach((docSnap) => {
     const item = { id: docSnap.id, ...docSnap.data() };
+    const cat = (item.category || "Supplies").trim() || "Supplies";
+    item.category = cat;
+    allItems.push(item);
     totalCount += 1;
-    if (!item.isChecked) pendingCount += 1;
-    const cat = item.category || "Supplies";
+    if (!isItemChecked(item)) pendingCount += 1;
     if (!grouped.has(cat)) grouped.set(cat, []);
     grouped.get(cat).push(item);
   });
 
   if (currentBoardData) {
     const modeText = currentBoardData.isPublicEditable === false ? "View Only" : "View & Mark Only";
-    boardMeta.textContent = `${pendingCount} pending • ${totalCount} items • ${modeText}`;
+    const photoCount = allItems.filter(hasPhoto).length;
+    boardMeta.textContent = `${pendingCount} pending • ${totalCount} items (${photoCount} photos) • ${modeText}`;
   }
 
   const canToggle = canToggleChecklist();
   const canManage = canManageStock();
   categoriesContainer.innerHTML = "";
   const sortedCats = Array.from(grouped.keys()).sort((a, b) => a.localeCompare(b));
+  renderCategoryFilterChips(sortedCats);
+
   if (sortedCats.length === 0) {
     categoriesContainer.innerHTML = '<p class="subtitle">No items on this checklist yet.</p>';
     return;
   }
 
-  sortedCats.forEach((cat) => {
+  if (viewMode === "all-grid") {
+    const visibleItems = selectedCategoryFilter === "ALL"
+      ? allItems
+      : (grouped.get(selectedCategoryFilter) || []);
+
+    const unmarkedPhotos = visibleItems.filter((it) => hasPhoto(it) && !isItemChecked(it));
+    const markedPhotos = visibleItems
+      .filter((it) => hasPhoto(it) && isItemChecked(it))
+      .sort((a, b) => toMillis(a.updatedAt) - toMillis(b.updatedAt));
+    const unmarkedText = visibleItems.filter((it) => !hasPhoto(it) && !isItemChecked(it));
+    const markedText = visibleItems
+      .filter((it) => !hasPhoto(it) && isItemChecked(it))
+      .sort((a, b) => toMillis(a.updatedAt) - toMillis(b.updatedAt));
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "cat-card";
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "cat-header-row";
+    const h3 = document.createElement("h3");
+    h3.className = "cat-title";
+    h3.textContent = selectedCategoryFilter === "ALL" ? "All Photos Grid" : selectedCategoryFilter;
+    const countSpan = document.createElement("span");
+    countSpan.className = "cat-count";
+    countSpan.textContent = `${unmarkedPhotos.length + markedPhotos.length} photos`;
+    headerRow.appendChild(h3);
+    headerRow.appendChild(countSpan);
+    wrapper.appendChild(headerRow);
+
+    if (unmarkedPhotos.length > 0) {
+      wrapper.appendChild(
+        buildPhotoGridElement(unmarkedPhotos, {
+          showCategoryBadge: selectedCategoryFilter === "ALL",
+          canToggle,
+          canManage
+        })
+      );
+    }
+
+    const orderedText = [...unmarkedText, ...markedText];
+    if (orderedText.length > 0) {
+      const textHeader = document.createElement("div");
+      textHeader.className = "marked-section-label";
+      textHeader.textContent = `Items (${orderedText.length})`;
+      wrapper.appendChild(textHeader);
+      orderedText.forEach((item) => {
+        wrapper.appendChild(
+          buildTextItemRow(item, {
+            canToggle,
+            canManage,
+            showCategoryTag: selectedCategoryFilter === "ALL"
+          })
+        );
+      });
+    }
+
+    if (markedPhotos.length > 0) {
+      const label = document.createElement("div");
+      label.className = "marked-section-label";
+      label.textContent = `Marked (${markedPhotos.length})`;
+      wrapper.appendChild(label);
+      wrapper.appendChild(
+        buildPhotoGridElement(markedPhotos, {
+          showCategoryBadge: selectedCategoryFilter === "ALL",
+          canToggle,
+          canManage
+        })
+      );
+    }
+
+    if (unmarkedPhotos.length === 0 && markedPhotos.length === 0 && orderedText.length === 0) {
+      wrapper.innerHTML += '<p class="subtitle">No items in this category.</p>';
+    }
+
+    categoriesContainer.appendChild(wrapper);
+    return;
+  }
+
+  const visibleCats = selectedCategoryFilter === "ALL"
+    ? sortedCats
+    : sortedCats.filter((c) => c === selectedCategoryFilter);
+
+  visibleCats.forEach((cat) => {
+    const catItems = grouped.get(cat) || [];
     const card = document.createElement("div");
     card.className = "cat-card";
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "cat-header-row";
     const h3 = document.createElement("h3");
     h3.className = "cat-title";
     h3.textContent = cat;
-    card.appendChild(h3);
+    const countSpan = document.createElement("span");
+    countSpan.className = "cat-count";
+    countSpan.textContent = `${catItems.filter((it) => !isItemChecked(it)).length} pending • ${catItems.length}`;
+    headerRow.appendChild(h3);
+    headerRow.appendChild(countSpan);
+    card.appendChild(headerRow);
 
-    const catItems = grouped.get(cat);
-    const photoItems = catItems.filter((it) => it.imageBase64 && it.imageBase64.trim().length > 0);
-    const textItems = catItems.filter((it) => !it.imageBase64 || it.imageBase64.trim().length === 0);
+    const unmarkedPhotos = catItems.filter((it) => hasPhoto(it) && !isItemChecked(it));
+    const unmarkedText = catItems.filter((it) => !hasPhoto(it) && !isItemChecked(it));
+    const markedText = catItems
+      .filter((it) => !hasPhoto(it) && isItemChecked(it))
+      .sort((a, b) => toMillis(a.updatedAt) - toMillis(b.updatedAt));
+    const markedPhotos = catItems
+      .filter((it) => hasPhoto(it) && isItemChecked(it))
+      .sort((a, b) => toMillis(a.updatedAt) - toMillis(b.updatedAt));
 
-    if (photoItems.length > 0) {
-      const grid = document.createElement("div");
-      grid.className = "photo-notes-grid";
-      photoItems.forEach((item) => {
-        const pCard = document.createElement("div");
-        pCard.className = `photo-note-card ${item.isChecked ? "checked" : ""}`;
-
-        const thumbWrap = document.createElement("div");
-        thumbWrap.className = "photo-note-thumb-wrap";
-        const img = document.createElement("img");
-        const rawB64 = item.imageBase64.trim();
-        img.src = rawB64.startsWith("data:") ? rawB64 : `data:image/jpeg;base64,${rawB64}`;
-        img.alt = item.title || "Photo Note";
-        img.style.cursor = "pointer";
-        img.addEventListener("click", () => {
-          if (photoLightbox && lightboxImg && lightboxTitle) {
-            lightboxImg.src = img.src;
-            lightboxTitle.textContent = item.title || "Photo Note";
-            photoLightbox.classList.remove("hidden");
-          }
-        });
-        thumbWrap.appendChild(img);
-
-        const circleBtn = document.createElement("button");
-        circleBtn.type = "button";
-        circleBtn.className = "photo-select-circle";
-        circleBtn.title = item.isChecked ? "Unselect photo note" : "Select photo note";
-        circleBtn.textContent = item.isChecked ? "✓" : "";
-        circleBtn.disabled = !canToggle;
-        circleBtn.addEventListener("click", async () => {
-          if (!canToggleChecklist()) return;
-          try {
-            await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
-              isChecked: !item.isChecked,
-              updatedAt: Date.now()
-            });
-          } catch (err) {
-            alert("Could not update photo note: " + (err?.message || "Permission denied"));
-          }
-        });
-        thumbWrap.appendChild(circleBtn);
-        pCard.appendChild(thumbWrap);
-
-        const footer = document.createElement("div");
-        footer.className = "photo-note-footer";
-        const titleSpan = document.createElement("span");
-        titleSpan.className = "photo-note-title";
-        titleSpan.textContent = item.quantity
-          ? `${item.title || "Photo Note"} • ${item.quantity}`
-          : (item.title || "Photo Note");
-        footer.appendChild(titleSpan);
-
-        if (canManage) {
-          const delBtn = document.createElement("button");
-          delBtn.type = "button";
-          delBtn.className = "btn-icon";
-          delBtn.title = "Remove photo note";
-          delBtn.textContent = "×";
-          delBtn.addEventListener("click", async () => {
-            if (!canManageStock()) return;
-            try {
-              await deleteDoc(doc(db, "shared_checklists", activeCode, "items", item.id));
-            } catch (err) {
-              alert("Could not remove item: " + (err?.message || "Permission denied"));
-            }
-          });
-          footer.appendChild(delBtn);
-        }
-
-        pCard.appendChild(footer);
-        grid.appendChild(pCard);
-      });
-      card.appendChild(grid);
+    if (unmarkedPhotos.length > 0) {
+      card.appendChild(buildPhotoGridElement(unmarkedPhotos, { canToggle, canManage }));
     }
 
-    textItems.forEach((item) => {
-      const row = document.createElement("div");
-      row.className = `item-row ${item.isChecked ? "checked" : ""}`;
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = !!item.isChecked;
-      cb.disabled = !canToggle;
-      cb.addEventListener("change", async () => {
-        if (!canToggleChecklist()) return;
-        try {
-          await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
-            isChecked: cb.checked,
-            updatedAt: Date.now()
-          });
-        } catch (err) {
-          cb.checked = !cb.checked;
-          alert("Could not update item: " + (err?.message || "Permission denied"));
-        }
-      });
-
-      const span = document.createElement("span");
-      span.className = "item-label";
-      span.textContent = item.title;
-      span.addEventListener("click", () => {
-        if (!cb.disabled) cb.click();
-      });
-
-      row.appendChild(cb);
-      row.appendChild(span);
-
-      if (item.quantity) {
-        const pill = document.createElement("span");
-        pill.className = "qty-pill";
-        pill.textContent = item.quantity;
-        row.appendChild(pill);
-      }
-
-      if (canManage) {
-        const delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.className = "btn-icon";
-        delBtn.title = "Remove item";
-        delBtn.textContent = "×";
-        delBtn.addEventListener("click", async () => {
-          if (!canManageStock()) return;
-          try {
-            await deleteDoc(doc(db, "shared_checklists", activeCode, "items", item.id));
-          } catch (err) {
-            alert("Could not remove item: " + (err?.message || "Permission denied"));
-          }
-        });
-        row.appendChild(delBtn);
-      }
-
-      card.appendChild(row);
+    const orderedText = [...unmarkedText, ...markedText];
+    orderedText.forEach((item) => {
+      card.appendChild(buildTextItemRow(item, { canToggle, canManage }));
     });
+
+    if (markedPhotos.length > 0) {
+      const label = document.createElement("div");
+      label.className = "marked-section-label";
+      label.textContent = `Marked (${markedPhotos.length})`;
+      card.appendChild(label);
+      card.appendChild(buildPhotoGridElement(markedPhotos, { canToggle, canManage }));
+    }
     categoriesContainer.appendChild(card);
   });
 }
@@ -433,32 +690,71 @@ function compressImageToBase64(file) {
 if (attachPhotoBtn && itemPhotoInput) {
   attachPhotoBtn.addEventListener("click", () => itemPhotoInput.click());
   itemPhotoInput.addEventListener("change", async () => {
-    const file = itemPhotoInput.files && itemPhotoInput.files[0];
-    if (!file) return;
+    const files = Array.from(itemPhotoInput.files || []);
+    if (files.length === 0) return;
     try {
-      draftPhotoBase64 = await compressImageToBase64(file);
-      if (draftPhotoImg && draftPhotoPreview) {
-        draftPhotoImg.src = `data:image/jpeg;base64,${draftPhotoBase64}`;
+      const encoded = await Promise.all(
+        files.map(async (f) => ({
+          base64: await compressImageToBase64(f),
+          name: (f.name || "").replace(/\.(jpe?g|png|webp|heic|heif|bmp|gif)$/i, "").trim()
+        }))
+      );
+      draftPhotos = encoded.filter((entry) => entry.base64 && entry.base64.length > 0);
+      if (draftPhotos.length > 0 && draftPhotoImg && draftPhotoPreview) {
+        draftPhotoImg.src = `data:image/jpeg;base64,${draftPhotos[0].base64}`;
+        if (draftPhotoLabel) {
+          draftPhotoLabel.textContent =
+            draftPhotos.length === 1
+              ? (draftPhotos[0].name || "1 photo attached")
+              : `${draftPhotos.length} photos ready to add`;
+        }
         draftPhotoPreview.classList.remove("hidden");
       }
     } catch (err) {
-      alert(err?.message || "Could not attach photo");
+      alert(err?.message || "Could not attach photo(s)");
     }
   });
 }
 
 if (clearDraftPhotoBtn) {
   clearDraftPhotoBtn.addEventListener("click", () => {
-    draftPhotoBase64 = "";
+    draftPhotos = [];
     if (itemPhotoInput) itemPhotoInput.value = "";
     if (draftPhotoPreview) draftPhotoPreview.classList.add("hidden");
   });
 }
 
+if (toggleLightboxBtn && photoLightbox) {
+  toggleLightboxBtn.addEventListener("click", async () => {
+    if (!canToggleChecklist() || !activeCode || !lightboxCurrentItemId || !latestItemsSnap) return;
+    const matchDoc = latestItemsSnap.docs.find((d) => d.id === lightboxCurrentItemId);
+    if (!matchDoc) return;
+    const nextChecked = !isItemChecked(matchDoc.data());
+    toggleLightboxBtn.disabled = true;
+    try {
+      await updateDoc(doc(db, "shared_checklists", activeCode, "items", lightboxCurrentItemId), {
+        isChecked: nextChecked,
+        updatedAt: Date.now()
+      });
+      toggleLightboxBtn.textContent = nextChecked ? "Unmark" : "Mark";
+    } catch (err) {
+      alert("Could not update photo note: " + (err?.message || "Permission denied"));
+    } finally {
+      toggleLightboxBtn.disabled = false;
+    }
+  });
+}
+
 if (closeLightboxBtn && photoLightbox) {
-  closeLightboxBtn.addEventListener("click", () => photoLightbox.classList.add("hidden"));
+  closeLightboxBtn.addEventListener("click", () => {
+    lightboxCurrentItemId = null;
+    photoLightbox.classList.add("hidden");
+  });
   photoLightbox.addEventListener("click", (e) => {
-    if (e.target === photoLightbox) photoLightbox.classList.add("hidden");
+    if (e.target === photoLightbox) {
+      lightboxCurrentItemId = null;
+      photoLightbox.classList.add("hidden");
+    }
   });
 }
 
@@ -466,33 +762,53 @@ addItemForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!canManageStock() || !activeCode) return;
   const rawTitle = document.getElementById("itemTitleInput").value.trim();
-  const title = rawTitle || (draftPhotoBase64 ? "Photo Note" : "");
   const quantity = document.getElementById("itemQtyInput").value.trim();
   const category = document.getElementById("itemCatInput").value.trim() || "Supplies";
-  if (!title) return;
+  if (!rawTitle && draftPhotos.length === 0) return;
 
-  const id = crypto.randomUUID ? crypto.randomUUID() : `item_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const now = Date.now();
+  const baseTime = Date.now();
   try {
-    await setDoc(doc(db, "shared_checklists", activeCode, "items", id), {
-      title,
-      quantity,
-      category,
-      notes: "",
-      isChecked: false,
-      imageBase64: draftPhotoBase64 || "",
-      addedByUid: currentUser ? currentUser.uid : "public",
-      addedByName: currentUser ? (currentUser.displayName || "Collaborator") : "Public Visitor",
-      createdAt: now,
-      updatedAt: now
-    });
+    if (draftPhotos.length > 0) {
+      for (let i = 0; i < draftPhotos.length; i++) {
+        const id = crypto.randomUUID ? crypto.randomUUID() : `item_${baseTime}_${i}_${Math.random().toString(36).slice(2, 8)}`;
+        const resolvedTitle = rawTitle
+          ? (draftPhotos.length === 1 ? rawTitle : `${rawTitle} ${i + 1}`)
+          : (draftPhotos[i].name || (draftPhotos.length === 1 ? "Photo Note" : `Photo Note ${i + 1}`));
+        await setDoc(doc(db, "shared_checklists", activeCode, "items", id), {
+          title: resolvedTitle,
+          quantity,
+          category,
+          notes: "",
+          isChecked: false,
+          imageBase64: draftPhotos[i].base64,
+          addedByUid: currentUser ? currentUser.uid : "public",
+          addedByName: currentUser ? (currentUser.displayName || "Collaborator") : "Public Visitor",
+          createdAt: baseTime + i,
+          updatedAt: baseTime + i
+        });
+      }
+    } else {
+      const id = crypto.randomUUID ? crypto.randomUUID() : `item_${baseTime}_${Math.random().toString(36).slice(2, 8)}`;
+      await setDoc(doc(db, "shared_checklists", activeCode, "items", id), {
+        title: rawTitle,
+        quantity,
+        category,
+        notes: "",
+        isChecked: false,
+        imageBase64: "",
+        addedByUid: currentUser ? currentUser.uid : "public",
+        addedByName: currentUser ? (currentUser.displayName || "Collaborator") : "Public Visitor",
+        createdAt: baseTime,
+        updatedAt: baseTime
+      });
+    }
     document.getElementById("itemTitleInput").value = "";
     document.getElementById("itemQtyInput").value = "";
-    draftPhotoBase64 = "";
+    draftPhotos = [];
     if (itemPhotoInput) itemPhotoInput.value = "";
     if (draftPhotoPreview) draftPhotoPreview.classList.add("hidden");
   } catch (err) {
-    alert("Could not add item: " + (err?.message || "Permission denied"));
+    alert("Could not add item(s): " + (err?.message || "Permission denied"));
   }
 });
 

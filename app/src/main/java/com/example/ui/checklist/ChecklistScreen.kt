@@ -1,10 +1,12 @@
 package com.example.ui.checklist
 
 import android.graphics.Bitmap
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,10 +27,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddAPhoto
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CropRotate
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -36,6 +41,7 @@ import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Html
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,6 +54,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -62,11 +69,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -77,12 +86,18 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.ChecklistItem
 import com.example.data.model.ChecklistSortOption
 import com.example.data.model.SharedChecklistItem
+import com.example.ui.components.DeviceAlbumBrowser
 import com.example.ui.components.ImageEditorDialog
 import com.example.ui.components.ImageUtils
+import com.example.ui.components.PickerPhotoItem
 import com.example.ui.components.ShareLinkReadyDialog
 import com.example.ui.components.ShareUtils
 import com.example.viewmodel.ShopKeepUiState
 import com.example.viewmodel.TaskViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @Composable
 fun ChecklistScreen(
@@ -90,6 +105,7 @@ fun ChecklistScreen(
     viewModel: TaskViewModel
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedSubTab by rememberSaveable { mutableIntStateOf(0) } // 0 = My Stock, 1 = Shared Live
     var searchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -99,7 +115,14 @@ fun ChecklistScreen(
     var preselectedCategory by remember { mutableStateOf("General Stock") }
 
     var draftPersonalPhotoBase64 by remember { mutableStateOf("") }
+    var draftPersonalPhotoTitle by remember { mutableStateOf("") }
     var draftSharedPhotoBase64 by remember { mutableStateOf("") }
+    var draftSharedPhotoTitle by remember { mutableStateOf("") }
+    var draftMultiPersonalPhotos by remember { mutableStateOf<List<DraftMultiPhoto>>(emptyList()) }
+    var draftMultiSharedPhotos by remember { mutableStateOf<List<DraftMultiPhoto>>(emptyList()) }
+    var isPreparingPhotos by remember { mutableStateOf(false) }
+    var showSmartPhotoSourceDialog by remember { mutableStateOf(false) }
+    var albumRefreshKey by remember { mutableIntStateOf(0) }
     var editorTargetBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var editorForShared by remember { mutableStateOf(false) }
     var editorDirectSavePersonal by remember { mutableStateOf<ChecklistItem?>(null) }
@@ -109,7 +132,8 @@ fun ChecklistScreen(
     var previewSharedPhotoItem by remember { mutableStateOf<SharedChecklistItem?>(null) }
     var editingSharedItem by remember { mutableStateOf<SharedChecklistItem?>(null) }
 
-    var showAddCategoryDialog by remember { mutableStateOf(false) }
+    var showManagePersonalCategories by remember { mutableStateOf(false) }
+    var showManageSharedCategories by remember { mutableStateOf(false) }
     var renamingCategoryTarget by remember { mutableStateOf<Pair<String, Boolean>?>(null) } // name to isShared
 
     var showCreateBoardDialog by remember { mutableStateOf(false) }
@@ -126,30 +150,113 @@ fun ChecklistScreen(
     }
 
     var pickForSharedBoard by rememberSaveable { mutableStateOf(false) }
-    val checklistPhotoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            val bmp = ImageUtils.decodeBitmapFromUri(context, uri, maxDimension = 1024)
-            if (bmp != null) {
-                val encoded = ImageUtils.encodeToBase64(bmp, maxWidth = 720, quality = 74)
-                if (pickForSharedBoard) {
-                    draftSharedPhotoBase64 = encoded
-                    if (!showAddSharedItemDialog && uiState.activeSharedBoard != null) {
-                        editingSharedItem = null
-                        showAddSharedItemDialog = true
-                    }
-                } else {
-                    draftPersonalPhotoBase64 = encoded
-                    if (!showAddPersonalItemDialog) {
-                        editingPersonalItem = null
-                        preselectedCategory = sortedCategories.firstOrNull() ?: "General Stock"
-                        showAddPersonalItemDialog = true
-                    }
+
+    fun applyEncodedPhotos(encodedList: List<DraftMultiPhoto>) {
+        if (encodedList.isEmpty()) {
+            Toast.makeText(context, "Could not load selected photo(s)", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (pickForSharedBoard) {
+            val alreadyMulti = draftMultiSharedPhotos.isNotEmpty()
+            if (encodedList.size == 1 && !alreadyMulti) {
+                draftSharedPhotoBase64 = encodedList.first().base64
+                draftSharedPhotoTitle = encodedList.first().displayName
+                if (!showAddSharedItemDialog && uiState.activeSharedBoard != null) {
+                    editingSharedItem = null
+                    showAddSharedItemDialog = true
                 }
             } else {
-                Toast.makeText(context, "Could not load selected photo", Toast.LENGTH_SHORT).show()
+                showAddSharedItemDialog = false
+                draftMultiSharedPhotos = draftMultiSharedPhotos + encodedList
             }
+        } else {
+            val alreadyMulti = draftMultiPersonalPhotos.isNotEmpty()
+            if (encodedList.size == 1 && !alreadyMulti) {
+                draftPersonalPhotoBase64 = encodedList.first().base64
+                draftPersonalPhotoTitle = encodedList.first().displayName
+                if (!showAddPersonalItemDialog) {
+                    editingPersonalItem = null
+                    preselectedCategory = sortedCategories.firstOrNull() ?: "General Stock"
+                    showAddPersonalItemDialog = true
+                }
+            } else {
+                showAddPersonalItemDialog = false
+                draftMultiPersonalPhotos = draftMultiPersonalPhotos + encodedList
+            }
+        }
+    }
+
+    fun handleSelectedUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch {
+            isPreparingPhotos = true
+            val encodedList = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    val bmp = ImageUtils.decodeBitmapFromUri(context, uri, maxDimension = 1024)
+                    bmp?.let {
+                        val b64 = ImageUtils.encodeToBase64(it, maxWidth = 720, quality = 74)
+                        val name = DeviceAlbumBrowser.queryDisplayName(context, uri)
+                        if (b64.isNotBlank()) {
+                            DraftMultiPhoto(
+                                id = UUID.randomUUID().toString(),
+                                base64 = b64,
+                                displayName = name
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                }
+            }
+            isPreparingPhotos = false
+            applyEncodedPhotos(encodedList)
+        }
+    }
+
+    fun handlePickedBrowserPhotos(picked: List<PickerPhotoItem>) {
+        if (picked.isEmpty()) return
+        scope.launch {
+            isPreparingPhotos = true
+            val encodedList = withContext(Dispatchers.IO) {
+                picked.mapNotNull { item ->
+                    val resolvedB64 = when {
+                        item.base64.isNotBlank() -> item.base64
+                        item.uri != null -> {
+                            val bmp = ImageUtils.decodeBitmapFromUri(context, item.uri, maxDimension = 1024)
+                            bmp?.let { ImageUtils.encodeToBase64(it, maxWidth = 720, quality = 74) } ?: ""
+                        }
+                        else -> ""
+                    }
+                    if (resolvedB64.isNotBlank()) {
+                        DraftMultiPhoto(
+                            id = UUID.randomUUID().toString(),
+                            base64 = resolvedB64,
+                            displayName = item.displayName
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+            isPreparingPhotos = false
+            applyEncodedPhotos(encodedList)
+        }
+    }
+
+    val checklistPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(20)
+    ) { uris -> handleSelectedUris(uris) }
+
+    val checklistFileSearchPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> handleSelectedUris(uris) }
+
+    val linkAlbumFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            DeviceAlbumBrowser.savePersistedTreeUri(context, treeUri)
+            albumRefreshKey += 1
         }
     }
 
@@ -172,17 +279,20 @@ fun ChecklistScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
                     if (selectedSubTab == 0) {
                         editingPersonalItem = null
                         draftPersonalPhotoBase64 = ""
+                        draftPersonalPhotoTitle = ""
                         preselectedCategory = sortedCategories.firstOrNull() ?: "General Stock"
                         showAddPersonalItemDialog = true
                     } else if (uiState.activeSharedBoard != null) {
                         editingSharedItem = null
                         draftSharedPhotoBase64 = ""
+                        draftSharedPhotoTitle = ""
                         showAddSharedItemDialog = true
                     } else {
                         showCreateBoardDialog = true
@@ -203,167 +313,223 @@ fun ChecklistScreen(
                 Tab(
                     selected = selectedSubTab == 0,
                     onClick = { selectedSubTab = 0 },
-                    text = { Text("My Stock Lists") }
+                    modifier = Modifier.height(38.dp),
+                    text = { Text("My Stock Lists", style = MaterialTheme.typography.labelLarge) }
                 )
                 Tab(
                     selected = selectedSubTab == 1,
                     onClick = { selectedSubTab = 1 },
-                    text = { Text("Shared Live Boards") }
+                    modifier = Modifier.height(38.dp),
+                    text = { Text("Shared Live Boards", style = MaterialTheme.typography.labelLarge) }
                 )
+            }
+            if (isPreparingPhotos) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
             if (selectedSubTab == 0) {
-                Column(
+                LazyColumn(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        .fillMaxSize()
+                        .testTag("personal_checklist_list"),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 84.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = { Text("Search items or categories") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("checklist_search_input")
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box {
-                            OutlinedButton(
-                                onClick = { showSortMenu = true },
-                                modifier = Modifier.testTag("checklist_sort_button")
+                    item(key = "personal_compact_controls") {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Compact single-line search bar (36dp height)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
                             ) {
-                                Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Sort: ${uiState.checklistSortOption.label}")
-                            }
-                            DropdownMenu(
-                                expanded = showSortMenu,
-                                onDismissRequest = { showSortMenu = false }
-                            ) {
-                                ChecklistSortOption.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option.label) },
-                                        onClick = {
-                                            viewModel.setChecklistSortOption(option)
-                                            showSortMenu = false
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Search,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "Search items or categories...",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
-                                    )
+                                        BasicTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            singleLine = true,
+                                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            ),
+                                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("checklist_search_input")
+                                        )
+                                    }
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(
+                                            onClick = { searchQuery = "" },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.Close,
+                                                contentDescription = "Clear search",
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedButton(
-                                onClick = { showAddCategoryDialog = true },
-                                modifier = Modifier.testTag("add_category_button")
-                            ) {
-                                Icon(Icons.Rounded.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("+ Category")
-                            }
-                            IconButton(
-                                onClick = {
-                                    val grouped = sortedCategories.map { cat ->
-                                        cat to activePersonalItems
-                                            .filter { it.category.equals(cat, ignoreCase = true) }
-                                            .map { Triple(it.title, it.quantity, it.isChecked) }
-                                    }.filter { it.second.isNotEmpty() }
-                                    ShareUtils.exportChecklistHtmlFile(
-                                        context = context,
-                                        title = "ShopKeep Restock Checklist",
-                                        items = grouped
-                                    )
-                                },
-                                modifier = Modifier.testTag("export_html_checklist_button")
-                            ) {
-                                Icon(Icons.Rounded.Html, contentDescription = "Export interactive HTML checklist")
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                pickForSharedBoard = false
-                                checklistPhotoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            modifier = Modifier.weight(1f).testTag("add_photo_note_button")
-                        ) {
-                            Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("+ Photo Note")
-                        }
-                        Button(
-                            onClick = {
-                                viewModel.publishPersonalListToPublicBoard {
-                                    selectedSubTab = 1
-                                    showShareDialog = true
-                                }
-                            },
-                            modifier = Modifier.weight(1f).testTag("publish_public_link_button")
-                        ) {
-                            Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Public Link")
-                        }
-                    }
-
-                    if (selectedPersonalPhotoCount > 0) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                            // Single compact horizontally-scrollable action strip (32dp chips)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "$selectedPersonalPhotoCount photo note(s) selected",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        pickForSharedBoard = false
+                                        showSmartPhotoSourceDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    },
+                                    label = { Text("+ Photo(s)") },
+                                    modifier = Modifier.height(32.dp).testTag("add_photo_note_button")
                                 )
-                                TextButton(
-                                    onClick = { viewModel.unselectAllChecklistPhotos() },
-                                    modifier = Modifier.testTag("unselect_all_photos_button")
+                                FilterChip(
+                                    selected = true,
+                                    onClick = {
+                                        viewModel.publishPersonalListToPublicBoard {
+                                            selectedSubTab = 1
+                                            showShareDialog = true
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    },
+                                    label = { Text("Public Link") },
+                                    modifier = Modifier.height(32.dp).testTag("publish_public_link_button")
+                                )
+                                Box {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = { showSortMenu = true },
+                                        leadingIcon = {
+                                            Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        },
+                                        label = { Text(uiState.checklistSortOption.label) },
+                                        modifier = Modifier.height(32.dp).testTag("checklist_sort_button")
+                                    )
+                                    DropdownMenu(
+                                        expanded = showSortMenu,
+                                        onDismissRequest = { showSortMenu = false }
+                                    ) {
+                                        ChecklistSortOption.entries.forEach { option ->
+                                            DropdownMenuItem(
+                                                text = { Text(option.label) },
+                                                onClick = {
+                                                    viewModel.setChecklistSortOption(option)
+                                                    showSortMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { showManagePersonalCategories = true },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    },
+                                    label = { Text("Categories") },
+                                    modifier = Modifier.height(32.dp).testTag("edit_categories_button")
+                                )
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        val grouped = sortedCategories.map { cat ->
+                                            cat to activePersonalItems
+                                                .filter { it.category.equals(cat, ignoreCase = true) }
+                                                .map { Triple(it.title, it.quantity, it.isChecked) }
+                                        }.filter { it.second.isNotEmpty() }
+                                        ShareUtils.exportChecklistHtmlFile(
+                                            context = context,
+                                            title = "ShopKeep Restock Checklist",
+                                            items = grouped
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Html, contentDescription = "Export interactive HTML checklist", modifier = Modifier.size(15.dp))
+                                    },
+                                    label = { Text("HTML") },
+                                    modifier = Modifier.height(32.dp).testTag("export_html_checklist_button")
+                                )
+                            }
+
+                            if (selectedPersonalPhotoCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("Unselect All")
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "$selectedPersonalPhotoCount photo note(s) selected",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        TextButton(
+                                            onClick = { viewModel.unselectAllChecklistPhotos() },
+                                            modifier = Modifier.testTag("unselect_all_photos_button")
+                                        ) {
+                                            Text("Unselect All")
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
                     items(sortedCategories, key = { it }) { category ->
                         val catItems = activePersonalItems.filter {
                             it.category.equals(category, ignoreCase = true)
                         }
                         Card(
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
+                            Column(modifier = Modifier.padding(12.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -393,6 +559,7 @@ fun ChecklistScreen(
                                             onClick = {
                                                 editingPersonalItem = null
                                                 draftPersonalPhotoBase64 = ""
+                                                draftPersonalPhotoTitle = ""
                                                 preselectedCategory = category
                                                 showAddPersonalItemDialog = true
                                             }
@@ -410,48 +577,38 @@ fun ChecklistScreen(
                                         modifier = Modifier.padding(top = 6.dp)
                                     )
                                 } else {
-                                    val photoItems = catItems.filter { it.imageBase64.isNotBlank() }
-                                    val textItems = catItems.filter { it.imageBase64.isBlank() }
+                                    val ordered = orderPersonalCategoryItems(catItems)
+                                    val unmarkedPhotos = ordered.unmarkedPhotos
+                                    val orderedTextItems = ordered.orderedText
+                                    val markedPhotos = ordered.markedPhotos
 
-                                    if (photoItems.isNotEmpty()) {
+                                    if (unmarkedPhotos.isNotEmpty()) {
                                         Spacer(Modifier.height(8.dp))
-                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            photoItems.chunked(2).forEach { pair ->
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                                ) {
-                                                    pair.forEach { photoItem ->
-                                                        ChecklistPhotoNoteCard(
-                                                            itemId = photoItem.id,
-                                                            title = photoItem.title,
-                                                            quantity = photoItem.quantity,
-                                                            notes = photoItem.notes,
-                                                            isSelected = photoItem.isChecked,
-                                                            imageBase64 = photoItem.imageBase64,
-                                                            onToggleSelect = { viewModel.toggleChecklistItem(photoItem) },
-                                                            onPreviewPhoto = { previewPersonalPhotoItem = photoItem },
-                                                            onEdit = {
-                                                                editingPersonalItem = photoItem
-                                                                draftPersonalPhotoBase64 = photoItem.imageBase64
-                                                                preselectedCategory = photoItem.category
-                                                                showAddPersonalItemDialog = true
-                                                            },
-                                                            onDelete = { viewModel.deleteChecklistItem(photoItem.id, permanent = false) },
-                                                            modifier = Modifier.weight(1f)
-                                                        )
-                                                    }
-                                                    if (pair.size == 1) {
-                                                        Spacer(Modifier.weight(1f))
-                                                    }
-                                                }
-                                            }
+                                        ResponsivePhotoGrid(items = unmarkedPhotos) { photoItem, cardModifier ->
+                                            ChecklistPhotoNoteCard(
+                                                itemId = photoItem.id,
+                                                title = photoItem.title,
+                                                quantity = photoItem.quantity,
+                                                notes = photoItem.notes,
+                                                isSelected = photoItem.isChecked,
+                                                imageBase64 = photoItem.imageBase64,
+                                                onToggleSelect = { viewModel.toggleChecklistItem(photoItem) },
+                                                onPreviewPhoto = { previewPersonalPhotoItem = photoItem },
+                                                onEdit = {
+                                                    editingPersonalItem = photoItem
+                                                    draftPersonalPhotoBase64 = photoItem.imageBase64
+                                                    preselectedCategory = photoItem.category
+                                                    showAddPersonalItemDialog = true
+                                                },
+                                                onDelete = { viewModel.deleteChecklistItem(photoItem.id, permanent = false) },
+                                                modifier = cardModifier
+                                            )
                                         }
                                     }
 
-                                    if (textItems.isNotEmpty()) {
+                                    if (orderedTextItems.isNotEmpty()) {
                                         Spacer(Modifier.height(6.dp))
-                                        textItems.forEach { item ->
+                                        orderedTextItems.forEach { item ->
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -492,169 +649,198 @@ fun ChecklistScreen(
                                             }
                                         }
                                     }
+
+                                    if (markedPhotos.isNotEmpty()) {
+                                        if (unmarkedPhotos.isNotEmpty() || orderedTextItems.isNotEmpty()) {
+                                            Text(
+                                                text = "Marked (${markedPhotos.size})",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                                            )
+                                        } else {
+                                            Spacer(Modifier.height(8.dp))
+                                        }
+                                        ResponsivePhotoGrid(items = markedPhotos) { photoItem, cardModifier ->
+                                            ChecklistPhotoNoteCard(
+                                                itemId = photoItem.id,
+                                                title = photoItem.title,
+                                                quantity = photoItem.quantity,
+                                                notes = photoItem.notes,
+                                                isSelected = photoItem.isChecked,
+                                                imageBase64 = photoItem.imageBase64,
+                                                onToggleSelect = { viewModel.toggleChecklistItem(photoItem) },
+                                                onPreviewPhoto = { previewPersonalPhotoItem = photoItem },
+                                                onEdit = {
+                                                    editingPersonalItem = photoItem
+                                                    draftPersonalPhotoBase64 = photoItem.imageBase64
+                                                    preselectedCategory = photoItem.category
+                                                    showAddPersonalItemDialog = true
+                                                },
+                                                onDelete = { viewModel.deleteChecklistItem(photoItem.id, permanent = false) },
+                                                modifier = cardModifier
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             } else {
-                // SHARED REAL-TIME BOARDS TAB
-                Column(
+                // SHARED REAL-TIME BOARDS TAB (compact scrollable header so photos & categories fill the screen)
+                val activeBoard = uiState.activeSharedBoard
+                val sharedCategories = remember(activeBoard?.categories, uiState.activeSharedItems) {
+                    ((activeBoard?.categories ?: emptyList()) + uiState.activeSharedItems.map { it.category })
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinctBy { it.lowercase() }
+                        .sortedBy { it.lowercase() }
+                }
+
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .testTag("shared_checklist_list"),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 84.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { showCreateBoardDialog = true },
-                            modifier = Modifier.weight(1f).testTag("create_shared_board_button")
-                        ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("New Live Board")
-                        }
-                        OutlinedButton(
-                            onClick = { showJoinBoardDialog = true },
-                            modifier = Modifier.weight(1f).testTag("join_shared_board_button")
-                        ) {
-                            Icon(Icons.Rounded.Link, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Join by Code")
-                        }
-                    }
-
-                    if (uiState.sharedChecklists.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            uiState.sharedChecklists.forEach { board ->
+                    item(key = "shared_compact_controls") {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 FilterChip(
-                                    selected = uiState.activeSharedCode == board.shareCode,
-                                    onClick = { viewModel.selectSharedChecklist(board.shareCode) },
-                                    label = { Text("${board.title} (${board.shareCode})") }
+                                    selected = true,
+                                    onClick = { showCreateBoardDialog = true },
+                                    leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                    label = { Text("New Board") },
+                                    modifier = Modifier.height(32.dp).testTag("create_shared_board_button")
                                 )
-                            }
-                        }
-                    }
-
-                    val activeBoard = uiState.activeSharedBoard
-                    if (activeBoard == null) {
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.width(10.dp))
-                                    Text("Real-Time Live Web Sharing", fontWeight = FontWeight.Bold)
-                                }
-                                Text(
-                                    text = "Create a live board to get a shareable Web URL. Staff or suppliers can open the URL in any browser to view & sync updates instantly without downloading an app.",
-                                    style = MaterialTheme.typography.bodyMedium
+                                FilterChip(
+                                    selected = false,
+                                    onClick = { showJoinBoardDialog = true },
+                                    leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                    label = { Text("Join Code") },
+                                    modifier = Modifier.height(32.dp).testTag("join_shared_board_button")
                                 )
-                            }
-                        }
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(activeBoard.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                        Text(
-                                            text = if (activeBoard.isPublicEditable) {
-                                                "Public Link • View & Mark/Unmark only"
-                                            } else {
-                                                "Restricted • Strictly view-only in public"
-                                            },
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                    }
-                                    Button(
+                                if (activeBoard != null) {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            pickForSharedBoard = true
+                                            showSmartPhotoSourceDialog = true
+                                        },
+                                        leadingIcon = { Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                        label = { Text("+ Photo(s)") },
+                                        modifier = Modifier.height(32.dp).testTag("add_shared_photo_note_button")
+                                    )
+                                    FilterChip(
+                                        selected = true,
                                         onClick = { showShareDialog = true },
-                                        modifier = Modifier.testTag("open_share_link_dialog_button")
-                                    ) {
-                                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("Public Link")
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                                OutlinedButton(
-                                    onClick = {
-                                        pickForSharedBoard = true
-                                        checklistPhotoPicker.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                        )
-                                    },
-                                    modifier = Modifier.fillMaxWidth().testTag("add_shared_photo_note_button")
-                                ) {
-                                    Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("+ Add Photo Note to Live Board")
+                                        leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                        label = { Text("Public Link") },
+                                        modifier = Modifier.height(32.dp).testTag("open_share_link_dialog_button")
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = { showManageSharedCategories = true },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                        label = { Text("Categories") },
+                                        modifier = Modifier.height(32.dp).testTag("edit_shared_categories_button")
+                                    )
                                 }
                             }
-                        }
 
-                        if (selectedSharedPhotoCount > 0) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
+                            if (uiState.sharedChecklists.isNotEmpty()) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text(
-                                        text = "$selectedSharedPhotoCount photo note(s) selected",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    TextButton(onClick = { viewModel.unselectAllSharedPhotos() }) {
-                                        Text("Unselect All")
+                                    uiState.sharedChecklists.forEach { board ->
+                                        FilterChip(
+                                            selected = uiState.activeSharedCode == board.shareCode,
+                                            onClick = { viewModel.selectSharedChecklist(board.shareCode) },
+                                            label = { Text("${board.title} (${board.shareCode})") },
+                                            modifier = Modifier.height(30.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (activeBoard != null) {
+                                Text(
+                                    text = "${activeBoard.title} • " + if (activeBoard.isPublicEditable) {
+                                        "Public: View & Mark/Unmark only"
+                                    } else {
+                                        "Public: Strictly view-only"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                )
+                            }
+
+                            if (selectedSharedPhotoCount > 0) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "$selectedSharedPhotoCount photo note(s) selected",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        TextButton(onClick = { viewModel.unselectAllSharedPhotos() }) {
+                                            Text("Unselect All")
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
 
-                        val sharedCategories = remember(activeBoard.categories, uiState.activeSharedItems) {
-                            (activeBoard.categories + uiState.activeSharedItems.map { it.category })
-                                .map { it.trim() }
-                                .filter { it.isNotEmpty() }
-                                .distinctBy { it.lowercase() }
-                                .sortedBy { it.lowercase() }
+                    if (activeBoard == null) {
+                        item(key = "shared_empty_card") {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Real-Time Live Web Sharing", fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(
+                                        text = "Create a live board to get a shareable Web URL. Visitors can open the URL in any browser to view & mark items.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                         }
-
-                        LazyColumn(
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(bottom = 84.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(sharedCategories, key = { it }) { cat ->
+                    } else {
+                        items(sharedCategories, key = { it }) { cat ->
                                 val itemsInCat = uiState.activeSharedItems.filter {
                                     it.category.equals(cat, ignoreCase = true)
                                 }
@@ -683,45 +869,35 @@ fun ChecklistScreen(
                                             }
                                         }
 
-                                        val sharedPhotoItems = itemsInCat.filter { it.imageBase64.isNotBlank() }
-                                        val sharedTextItems = itemsInCat.filter { it.imageBase64.isBlank() }
+                                        val orderedShared = orderSharedCategoryItems(itemsInCat)
+                                        val unmarkedSharedPhotos = orderedShared.unmarkedPhotos
+                                        val orderedSharedText = orderedShared.orderedText
+                                        val markedSharedPhotos = orderedShared.markedPhotos
 
-                                        if (sharedPhotoItems.isNotEmpty()) {
+                                        if (unmarkedSharedPhotos.isNotEmpty()) {
                                             Spacer(Modifier.height(6.dp))
-                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                sharedPhotoItems.chunked(2).forEach { pair ->
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                                    ) {
-                                                        pair.forEach { photoItem ->
-                                                            ChecklistPhotoNoteCard(
-                                                                itemId = photoItem.id,
-                                                                title = photoItem.title,
-                                                                quantity = photoItem.quantity,
-                                                                notes = photoItem.notes,
-                                                                isSelected = photoItem.isChecked,
-                                                                imageBase64 = photoItem.imageBase64,
-                                                                onToggleSelect = { viewModel.toggleSharedItem(photoItem) },
-                                                                onPreviewPhoto = { previewSharedPhotoItem = photoItem },
-                                                                onEdit = {
-                                                                    editingSharedItem = photoItem
-                                                                    draftSharedPhotoBase64 = photoItem.imageBase64
-                                                                    showAddSharedItemDialog = true
-                                                                },
-                                                                onDelete = { viewModel.deleteSharedItem(photoItem.id) },
-                                                                modifier = Modifier.weight(1f)
-                                                            )
-                                                        }
-                                                        if (pair.size == 1) {
-                                                            Spacer(Modifier.weight(1f))
-                                                        }
-                                                    }
-                                                }
+                                            ResponsivePhotoGrid(items = unmarkedSharedPhotos) { photoItem, cardModifier ->
+                                                ChecklistPhotoNoteCard(
+                                                    itemId = photoItem.id,
+                                                    title = photoItem.title,
+                                                    quantity = photoItem.quantity,
+                                                    notes = photoItem.notes,
+                                                    isSelected = photoItem.isChecked,
+                                                    imageBase64 = photoItem.imageBase64,
+                                                    onToggleSelect = { viewModel.toggleSharedItem(photoItem) },
+                                                    onPreviewPhoto = { previewSharedPhotoItem = photoItem },
+                                                    onEdit = {
+                                                        editingSharedItem = photoItem
+                                                        draftSharedPhotoBase64 = photoItem.imageBase64
+                                                        showAddSharedItemDialog = true
+                                                    },
+                                                    onDelete = { viewModel.deleteSharedItem(photoItem.id) },
+                                                    modifier = cardModifier
+                                                )
                                             }
                                         }
 
-                                        sharedTextItems.forEach { item ->
+                                        orderedSharedText.forEach { item ->
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 verticalAlignment = Alignment.CenterVertically
@@ -744,6 +920,39 @@ fun ChecklistScreen(
                                                 }
                                             }
                                         }
+
+                                        if (markedSharedPhotos.isNotEmpty()) {
+                                            if (unmarkedSharedPhotos.isNotEmpty() || orderedSharedText.isNotEmpty()) {
+                                                Text(
+                                                    text = "Marked (${markedSharedPhotos.size})",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+                                                )
+                                            } else {
+                                                Spacer(Modifier.height(6.dp))
+                                            }
+                                            ResponsivePhotoGrid(items = markedSharedPhotos) { photoItem, cardModifier ->
+                                                ChecklistPhotoNoteCard(
+                                                    itemId = photoItem.id,
+                                                    title = photoItem.title,
+                                                    quantity = photoItem.quantity,
+                                                    notes = photoItem.notes,
+                                                    isSelected = photoItem.isChecked,
+                                                    imageBase64 = photoItem.imageBase64,
+                                                    onToggleSelect = { viewModel.toggleSharedItem(photoItem) },
+                                                    onPreviewPhoto = { previewSharedPhotoItem = photoItem },
+                                                    onEdit = {
+                                                        editingSharedItem = photoItem
+                                                        draftSharedPhotoBase64 = photoItem.imageBase64
+                                                        showAddSharedItemDialog = true
+                                                    },
+                                                    onDelete = { viewModel.deleteSharedItem(photoItem.id) },
+                                                    modifier = cardModifier
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -752,10 +961,11 @@ fun ChecklistScreen(
                 }
             }
         }
-    }
 
     if (showAddPersonalItemDialog) {
-        var title by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.title ?: "") }
+        var title by remember(editingPersonalItem?.id, draftPersonalPhotoTitle) {
+            mutableStateOf(editingPersonalItem?.title ?: draftPersonalPhotoTitle)
+        }
         var qty by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.quantity ?: "") }
         var category by remember(editingPersonalItem?.id, preselectedCategory) { mutableStateOf(preselectedCategory) }
         var notes by remember(editingPersonalItem?.id) { mutableStateOf(editingPersonalItem?.notes ?: "") }
@@ -813,15 +1023,13 @@ fun ChecklistScreen(
                         OutlinedButton(
                             onClick = {
                                 pickForSharedBoard = false
-                                checklistPhotoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
+                                showSmartPhotoSourceDialog = true
                             },
                             modifier = Modifier.fillMaxWidth().testTag("attach_checklist_photo_button")
                         ) {
                             Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Attach Photo Note")
+                            Text("Attach Photo(s)")
                         }
                     }
                     OutlinedTextField(
@@ -840,6 +1048,22 @@ fun ChecklistScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (sortedCategories.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            sortedCategories.forEach { catOption ->
+                                FilterChip(
+                                    selected = category.equals(catOption, ignoreCase = true),
+                                    onClick = { category = catOption },
+                                    label = { Text(catOption) }
+                                )
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = category,
                         onValueChange = { category = it },
@@ -881,31 +1105,45 @@ fun ChecklistScreen(
         )
     }
 
-    if (showAddCategoryDialog) {
-        var newCatName by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddCategoryDialog = false },
-            title = { Text("New Checklist Category") },
-            text = {
-                OutlinedTextField(
-                    value = newCatName,
-                    onValueChange = { newCatName = it },
-                    label = { Text("Category Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("new_category_input")
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    if (newCatName.isNotBlank()) {
-                        viewModel.addChecklistCategory(newCatName)
-                        showAddCategoryDialog = false
-                    }
-                }) { Text("Add") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddCategoryDialog = false }) { Text("Cancel") }
-            }
+    if (showManagePersonalCategories) {
+        val entries = sortedCategories.map { cat ->
+            EditableCategoryEntry(
+                name = cat,
+                itemCount = activePersonalItems.count { it.category.equals(cat, ignoreCase = true) }
+            )
+        }
+        ManageCategoriesDialog(
+            title = "Edit Stock Categories",
+            categories = entries,
+            fallbackMoveTarget = "General Stock",
+            onAddCategory = { viewModel.addChecklistCategory(it) },
+            onRenameCategory = { oldName, newName -> viewModel.renameChecklistCategory(oldName, newName) },
+            onDeleteCategory = { name, moveTo -> viewModel.deleteChecklistCategory(name, moveTo) },
+            onDismiss = { showManagePersonalCategories = false }
+        )
+    }
+
+    val currentSharedBoardForCategories = uiState.activeSharedBoard
+    if (showManageSharedCategories && currentSharedBoardForCategories != null) {
+        val sharedCatNames = (currentSharedBoardForCategories.categories + uiState.activeSharedItems.map { it.category })
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+        val entries = sharedCatNames.map { cat ->
+            EditableCategoryEntry(
+                name = cat,
+                itemCount = uiState.activeSharedItems.count { it.category.equals(cat, ignoreCase = true) }
+            )
+        }
+        ManageCategoriesDialog(
+            title = "Edit Live Board Categories",
+            categories = entries,
+            fallbackMoveTarget = "Supplies",
+            onAddCategory = { viewModel.addSharedCategory(it) },
+            onRenameCategory = { oldName, newName -> viewModel.renameSharedCategory(oldName, newName) },
+            onDeleteCategory = { name, moveTo -> viewModel.deleteSharedCategory(name, moveTo) },
+            onDismiss = { showManageSharedCategories = false }
         )
     }
 
@@ -1005,7 +1243,9 @@ fun ChecklistScreen(
 
     if (showAddSharedItemDialog) {
         val board = uiState.activeSharedBoard
-        var title by remember(editingSharedItem?.id) { mutableStateOf(editingSharedItem?.title ?: "") }
+        var title by remember(editingSharedItem?.id, draftSharedPhotoTitle) {
+            mutableStateOf(editingSharedItem?.title ?: draftSharedPhotoTitle)
+        }
         var qty by remember(editingSharedItem?.id) { mutableStateOf(editingSharedItem?.quantity ?: "") }
         var category by remember(editingSharedItem?.id, board?.shareCode) {
             mutableStateOf(editingSharedItem?.category ?: board?.categories?.firstOrNull() ?: "Supplies")
@@ -1065,15 +1305,13 @@ fun ChecklistScreen(
                         OutlinedButton(
                             onClick = {
                                 pickForSharedBoard = true
-                                checklistPhotoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
+                                showSmartPhotoSourceDialog = true
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Rounded.AddAPhoto, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Attach Photo Note")
+                            Text("Attach Photo(s)")
                         }
                     }
                     OutlinedTextField(
@@ -1090,6 +1328,27 @@ fun ChecklistScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    val sharedCatChoices = ((board?.categories ?: emptyList()) + uiState.activeSharedItems.map { it.category })
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinctBy { it.lowercase() }
+                        .sortedBy { it.lowercase() }
+                    if (sharedCatChoices.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            sharedCatChoices.forEach { catOption ->
+                                FilterChip(
+                                    selected = category.equals(catOption, ignoreCase = true),
+                                    onClick = { category = catOption },
+                                    label = { Text(catOption) }
+                                )
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = category,
                         onValueChange = { category = it },
@@ -1231,6 +1490,96 @@ fun ChecklistScreen(
                 viewModel.setBoardAsPublicDefault(currentBoard)
             },
             onDismiss = { showShareDialog = false }
+        )
+    }
+
+    if (draftMultiPersonalPhotos.isNotEmpty()) {
+        MultiPhotoUploadDialog(
+            title = "Add Photo Notes",
+            photos = draftMultiPersonalPhotos,
+            availableCategories = sortedCategories,
+            initialCategory = preselectedCategory.ifBlank { sortedCategories.firstOrNull() ?: "General Stock" },
+            showQuantityField = true,
+            onAddMoreClick = {
+                pickForSharedBoard = false
+                showSmartPhotoSourceDialog = true
+            },
+            onRemovePhoto = { id ->
+                draftMultiPersonalPhotos = draftMultiPersonalPhotos.filterNot { it.id == id }
+            },
+            onSaveAll = { baseTitle, qty, cat, notes ->
+                viewModel.saveMultipleChecklistPhotos(
+                    photosBase64 = draftMultiPersonalPhotos.map { it.base64 },
+                    baseTitle = baseTitle,
+                    quantity = qty,
+                    category = cat,
+                    notes = notes,
+                    photoTitles = draftMultiPersonalPhotos.map { it.displayName }
+                )
+                draftMultiPersonalPhotos = emptyList()
+            },
+            onDismiss = { draftMultiPersonalPhotos = emptyList() }
+        )
+    }
+
+    if (draftMultiSharedPhotos.isNotEmpty()) {
+        val board = uiState.activeSharedBoard
+        val sharedCats = ((board?.categories ?: emptyList()) + uiState.activeSharedItems.map { it.category })
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .sortedBy { it.lowercase() }
+        MultiPhotoUploadDialog(
+            title = "Add Live Board Photos",
+            photos = draftMultiSharedPhotos,
+            availableCategories = sharedCats,
+            initialCategory = sharedCats.firstOrNull() ?: "Supplies",
+            showQuantityField = true,
+            onAddMoreClick = {
+                pickForSharedBoard = true
+                showSmartPhotoSourceDialog = true
+            },
+            onRemovePhoto = { id ->
+                draftMultiSharedPhotos = draftMultiSharedPhotos.filterNot { it.id == id }
+            },
+            onSaveAll = { baseTitle, qty, cat, notes ->
+                viewModel.saveMultipleSharedPhotos(
+                    photosBase64 = draftMultiSharedPhotos.map { it.base64 },
+                    baseTitle = baseTitle,
+                    quantity = qty,
+                    category = cat,
+                    notes = notes,
+                    photoTitles = draftMultiSharedPhotos.map { it.displayName }
+                )
+                draftMultiSharedPhotos = emptyList()
+            },
+            onDismiss = { draftMultiSharedPhotos = emptyList() }
+        )
+    }
+
+    if (showSmartPhotoSourceDialog) {
+        SmartPhotoSourceDialog(
+            title = if (pickForSharedBoard) "Add Shared Photo Note(s)" else "Add Photo Note(s)",
+            savedAreaPhotos = uiState.photos,
+            folderRefreshKey = albumRefreshKey,
+            onOpenFileSearchPicker = {
+                showSmartPhotoSourceDialog = false
+                checklistFileSearchPicker.launch(arrayOf("image/*"))
+            },
+            onOpenGalleryPicker = {
+                showSmartPhotoSourceDialog = false
+                checklistPhotoPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onLaunchLinkAlbumFolder = {
+                linkAlbumFolderLauncher.launch(null)
+            },
+            onConfirmPickedPhotos = { picked ->
+                showSmartPhotoSourceDialog = false
+                handlePickedBrowserPhotos(picked)
+            },
+            onDismiss = { showSmartPhotoSourceDialog = false }
         )
     }
 }

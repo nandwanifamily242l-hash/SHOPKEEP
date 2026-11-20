@@ -14,7 +14,7 @@ import java.io.File
 import java.net.URLEncoder
 
 object ShareUtils {
-    const val DEFAULT_WEB_BASE_URL = "https://gen-lang-client-0080616262.web.app"
+    const val DEFAULT_WEB_BASE_URL = "https://nandwanifamily242l-hash.github.io/SHOPKEEP"
     private const val PREFS_NAME = "shopkeep_share_prefs"
     private const val KEY_CUSTOM_WEB_URL = "custom_web_base_url"
 

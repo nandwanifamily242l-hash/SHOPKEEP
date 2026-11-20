@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,7 +52,34 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.ChecklistItem
+import com.example.data.model.SharedChecklistItem
 import com.example.ui.components.ImageUtils
+
+data class OrderedCategorySections<T>(
+    val unmarkedPhotos: List<T>,
+    val unmarkedText: List<T>,
+    val markedText: List<T>,
+    val markedPhotos: List<T>
+) {
+    val orderedText: List<T> get() = unmarkedText + markedText
+}
+
+fun orderPersonalCategoryItems(items: List<ChecklistItem>): OrderedCategorySections<ChecklistItem> =
+    OrderedCategorySections(
+        unmarkedPhotos = items.filter { it.imageBase64.isNotBlank() && !it.isChecked },
+        unmarkedText = items.filter { it.imageBase64.isBlank() && !it.isChecked },
+        markedText = items.filter { it.imageBase64.isBlank() && it.isChecked }.sortedBy { it.updatedAt },
+        markedPhotos = items.filter { it.imageBase64.isNotBlank() && it.isChecked }.sortedBy { it.updatedAt }
+    )
+
+fun orderSharedCategoryItems(items: List<SharedChecklistItem>): OrderedCategorySections<SharedChecklistItem> =
+    OrderedCategorySections(
+        unmarkedPhotos = items.filter { it.imageBase64.isNotBlank() && !it.isChecked },
+        unmarkedText = items.filter { it.imageBase64.isBlank() && !it.isChecked },
+        markedText = items.filter { it.imageBase64.isBlank() && it.isChecked }.sortedBy { it.updatedAt },
+        markedPhotos = items.filter { it.imageBase64.isNotBlank() && it.isChecked }.sortedBy { it.updatedAt }
+    )
 
 @Composable
 fun ChecklistPhotoNoteCard(
@@ -94,7 +122,7 @@ fun ChecklistPhotoNoteCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(136.dp)
+                    .height(128.dp)
                     .clickable { onPreviewPhoto() }
             ) {
                 if (bitmap != null) {
@@ -333,4 +361,39 @@ fun ChecklistPhotoNotePreviewDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         }
     )
+}
+
+@Composable
+fun <T> ResponsivePhotoGrid(
+    items: List<T>,
+    modifier: Modifier = Modifier,
+    spacingDp: Int = 10,
+    itemContent: @Composable (item: T, cardModifier: Modifier) -> Unit
+) {
+    if (items.isEmpty()) return
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val columns = when {
+            maxWidth < 520.dp -> 2
+            maxWidth < 780.dp -> 3
+            else -> 4
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(spacingDp.dp)
+        ) {
+            items.chunked(columns).forEach { rowItems ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(spacingDp.dp)
+                ) {
+                    rowItems.forEach { item ->
+                        itemContent(item, Modifier.weight(1f))
+                    }
+                    repeat(columns - rowItems.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
 }
