@@ -717,7 +717,15 @@ class TaskViewModel(
             return
         }
         val code = shareCode.trim().uppercase()
-        _uiState.update { it.copy(activeSharedCode = code) }
+        val matched = _uiState.value.sharedChecklists.firstOrNull { it.shareCode.equals(code, ignoreCase = true) }
+        val boardChanged = !_uiState.value.activeSharedCode.equals(code, ignoreCase = true)
+        _uiState.update { state ->
+            state.copy(
+                activeSharedCode = code,
+                activeSharedBoard = matched ?: if (boardChanged) null else state.activeSharedBoard,
+                activeSharedItems = if (boardChanged) emptyList() else state.activeSharedItems
+            )
+        }
         sharedBoardJob = viewModelScope.launch {
             repository.observeSharedChecklist(code)
                 .catch { handleFlowError(it) }

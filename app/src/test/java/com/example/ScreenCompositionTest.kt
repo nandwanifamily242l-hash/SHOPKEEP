@@ -223,6 +223,17 @@ class ScreenCompositionTest {
     @Test
     fun tasksAndMatrixAndPhotosAndHabitsAndShareDialog_composeCleanly() {
         val (state, vm) = makeStateAndVm()
+        val targetBoard = state.activeSharedBoard!!
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val msg = com.example.ui.components.ShareUtils.buildSharedBoardShareMessage(
+            context = ctx,
+            board = targetBoard,
+            items = state.activeSharedItems
+        )
+        org.junit.Assert.assertTrue(
+            "Share message must include exact board code ?checklist=${targetBoard.shareCode}",
+            msg.contains("?checklist=${targetBoard.shareCode}")
+        )
         composeRule.setContent {
             ShopKeepTheme {
                 TasksScreen(uiState = state, viewModel = vm)
@@ -230,7 +241,7 @@ class ScreenCompositionTest {
                 PhotosScreen(uiState = state, viewModel = vm)
                 EisenhowerMatrixScreen(uiState = state, viewModel = vm)
                 ShareLinkReadyDialog(
-                    board = state.activeSharedBoard!!,
+                    board = targetBoard,
                     items = state.activeSharedItems,
                     onDismiss = {}
                 )
@@ -238,6 +249,9 @@ class ScreenCompositionTest {
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("copy_web_url_button").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            com.example.ui.components.ShareUtils.buildLiveWebUrl(ctx, targetBoard.shareCode)
+        ).assertIsDisplayed()
     }
 
     @Test

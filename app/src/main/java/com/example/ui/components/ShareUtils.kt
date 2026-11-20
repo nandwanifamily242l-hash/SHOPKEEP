@@ -112,7 +112,7 @@ object ShareUtils {
         context: Context,
         board: SharedChecklist,
         items: List<SharedChecklistItem>,
-        usePublicLandingLink: Boolean = true
+        usePublicLandingLink: Boolean = false
     ): String {
         val webUrl = if (usePublicLandingLink) {
             buildPublicLandingUrl(context)
@@ -124,7 +124,7 @@ object ShareUtils {
             appendLine("ShopKeep Live Checklist: ${board.title}")
             appendLine("$pendingCount pending • ${items.size} total items")
             appendLine()
-            appendLine("Open live in browser (no app or code needed):")
+            appendLine("Open \"${board.title}\" live in browser (no app needed):")
             appendLine(webUrl)
         }
     }

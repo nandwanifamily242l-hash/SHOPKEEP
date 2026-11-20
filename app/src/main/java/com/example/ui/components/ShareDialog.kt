@@ -65,7 +65,7 @@ fun ShareLinkReadyDialog(
         context = context,
         board = board,
         items = items,
-        usePublicLandingLink = true
+        usePublicLandingLink = false
     )
 
     AlertDialog(
@@ -109,7 +109,7 @@ fun ShareLinkReadyDialog(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "PUBLIC LINK (NO CODE NEEDED)",
+                                    text = "PUBLIC LINK FOR \"${board.title.uppercase()}\"",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.Bold
@@ -123,7 +123,7 @@ fun ShareLinkReadyDialog(
                             }
                         }
                         Text(
-                            text = publicUrl,
+                            text = boardSpecificUrl,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
@@ -131,7 +131,7 @@ fun ShareLinkReadyDialog(
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { ShareUtils.copyToClipboard(context, "Public Link", publicUrl) },
+                                onClick = { ShareUtils.copyToClipboard(context, "${board.title} Link", boardSpecificUrl) },
                                 modifier = Modifier.weight(1f).testTag("copy_web_url_button")
                             ) {
                                 Icon(Icons.Rounded.ContentCopy, contentDescription = null)
@@ -140,7 +140,7 @@ fun ShareLinkReadyDialog(
                             }
                             OutlinedButton(
                                 onClick = {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(publicUrl)))
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(boardSpecificUrl)))
                                 },
                                 modifier = Modifier.weight(1f).testTag("open_web_url_button")
                             ) {
@@ -235,10 +235,10 @@ fun ShareLinkReadyDialog(
                 }
 
                 TextButton(
-                    onClick = { ShareUtils.copyToClipboard(context, "Board Direct Link", boardSpecificUrl) },
+                    onClick = { ShareUtils.copyToClipboard(context, "Main Public Home URL", publicUrl) },
                     modifier = Modifier.fillMaxWidth().testTag("copy_share_code_button")
                 ) {
-                    Text("Copy Board-Specific URL (${board.shareCode})")
+                    Text("Copy Main Home URL (Default Board)")
                 }
             }
         },
