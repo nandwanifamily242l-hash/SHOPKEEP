@@ -172,11 +172,17 @@ class MainActivity : ComponentActivity() {
 
     private fun extractShareParam(intent: Intent?): String? {
         val data = intent?.data ?: return null
-        val queryCode = data.getQueryParameter("checklist")
-        if (!queryCode.isNullOrBlank()) return queryCode
-        val path = data.path ?: return null
+        val queryCode = data.getQueryParameter("checklist") ?: data.getQueryParameter("board")
+        if (!queryCode.isNullOrBlank()) return queryCode.trim()
+        val path = data.path ?: ""
         if (path.contains("/checklist/")) {
             return path.substringAfter("/checklist/").substringBefore("/").ifBlank { null }
+        }
+        if ((data.scheme == "shopkeep" || data.scheme == "homekeep") && data.host == "checklist") {
+            return data.lastPathSegment?.takeIf { it.isNotBlank() }
+        }
+        if (data.scheme == "https" || data.scheme == "http") {
+            return "PUBLIC_DEFAULT"
         }
         return data.lastPathSegment
     }
@@ -263,7 +269,6 @@ fun ShopKeepAppRoot(
             AuthenticatedShopKeepContent(
                 user = activeUser,
                 viewModel = viewModel,
-                hasIncomingDeepLink = !incomingShareCode.isNullOrBlank(),
                 onSignedOut = {
                     currentUser = null
                 }
@@ -310,7 +315,6 @@ fun ShopKeepAppRoot(
 private fun AuthenticatedShopKeepContent(
     user: FirebaseUser,
     viewModel: TaskViewModel,
-    hasIncomingDeepLink: Boolean,
     onSignedOut: () -> Unit
 ) {
     val context = LocalContext.current
@@ -343,8 +347,8 @@ private fun AuthenticatedShopKeepContent(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(uiState.activeSharedCode, hasIncomingDeepLink) {
-        if (uiState.activeSharedCode != null && hasIncomingDeepLink) {
+    LaunchedEffect(uiState.navigateToSharedTabEvent) {
+        if (uiState.navigateToSharedTabEvent > 0) {
             currentDestination = ShopDestination.CHECKLIST
         }
     }

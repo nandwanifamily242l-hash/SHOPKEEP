@@ -442,7 +442,75 @@ class ScreenCompositionTest {
         org.junit.Assert.assertEquals("SHOP-A1", deletedCode)
         org.junit.Assert.assertEquals(listOf("SHOP-B2"), boards.map { it.shareCode })
     }
+
+    @Test
+    fun htmlExport_embedsImagesInResponsiveGrid_andMovesMarkedPhotosToBottom() {
+        val fakeB64Unmarked = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+        val fakeB64Marked = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        val html = com.example.ui.components.ShareUtils.buildChecklistHtml(
+            title = "Shop Stock Test",
+            sections = listOf(
+                "1.MED-1 RANGE" to listOf(
+                    com.example.ui.components.HtmlChecklistItem(
+                        title = "Saree Unmarked",
+                        quantity = "2 pcs",
+                        isChecked = false,
+                        imageBase64 = fakeB64Unmarked
+                    ),
+                    com.example.ui.components.HtmlChecklistItem(
+                        title = "Saree Marked",
+                        quantity = "1 pc",
+                        isChecked = true,
+                        imageBase64 = fakeB64Marked,
+                        updatedAt = 500L
+                    ),
+                    com.example.ui.components.HtmlChecklistItem(
+                        title = "Tag Pins",
+                        quantity = "1 box",
+                        isChecked = false
+                    )
+                )
+            )
+        )
+        org.junit.Assert.assertTrue(html.contains("src=\"data:image/jpeg;base64,$fakeB64Unmarked\""))
+        org.junit.Assert.assertTrue(html.contains("src=\"data:image/jpeg;base64,$fakeB64Marked\""))
+        org.junit.Assert.assertTrue(html.contains("Marked (1)"))
+        val unmarkedIdx = html.indexOf("Saree Unmarked")
+        val textIdx = html.indexOf("Tag Pins")
+        val markedIdx = html.indexOf("Saree Marked")
+        org.junit.Assert.assertTrue("Unmarked photo ($unmarkedIdx) should precede text ($textIdx)", unmarkedIdx < textIdx)
+        org.junit.Assert.assertTrue("Text ($textIdx) should precede marked photo ($markedIdx)", textIdx < markedIdx)
+    }
+
+    @Test
+    fun repositoryExtractShareCode_handlesLandingUrlsAndBoardQueryUrls() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val app = FirebaseApp.getApps(context).firstOrNull() ?: FirebaseApp.initializeApp(
+            context,
+            FirebaseOptions.Builder()
+                .setApplicationId("com.aistudio.applet.abgygd")
+                .setProjectId("demo-no-project")
+                .setApiKey("fake-api-key")
+                .build()
+        )
+        val firestore = FirebaseFirestore.getInstance(app, "ai-studio-android-homekeep-8502e84b-2339-4853-b108-eaf44e3bbe94")
+        val repo = TaskRepository(firestore)
+
+        org.junit.Assert.assertEquals(
+            "PUBLIC_DEFAULT",
+            repo.extractShareCode("https://nandwanifamily242l-hash.github.io/SHOPKEEP/")
+        )
+        org.junit.Assert.assertEquals(
+            "SHOP-QP9CN8",
+            repo.extractShareCode("https://nandwanifamily242l-hash.github.io/SHOPKEEP/?checklist=SHOP-QP9CN8")
+        )
+        org.junit.Assert.assertEquals(
+            "SHOP-ABC123",
+            repo.extractShareCode("https://gen-lang-client-0080616262.web.app/checklist/shop-abc123")
+        )
+    }
 }
+
 
 
 

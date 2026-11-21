@@ -1,7 +1,5 @@
 package com.example.ui.components
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -140,7 +138,7 @@ fun ShareLinkReadyDialog(
                             }
                             OutlinedButton(
                                 onClick = {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(boardSpecificUrl)))
+                                    ShareUtils.openWebUrlInBrowser(context, boardSpecificUrl)
                                 },
                                 modifier = Modifier.weight(1f).testTag("open_web_url_button")
                             ) {

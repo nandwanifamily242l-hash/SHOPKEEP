@@ -43,6 +43,7 @@ data class ShopKeepUiState(
     val activeSharedBoard: SharedChecklist? = null,
     val activeSharedItems: List<SharedChecklistItem> = emptyList(),
     val pendingDeepLinkShareCode: String? = null,
+    val navigateToSharedTabEvent: Int = 0,
     val errorMessage: String? = null,
     val statusBanner: String? = null
 )
@@ -177,6 +178,10 @@ class TaskViewModel(
 
     fun clearMessages() {
         _uiState.update { it.copy(errorMessage = null, statusBanner = null) }
+    }
+
+    fun consumeSharedTabNavigation() {
+        _uiState.update { it.copy(navigateToSharedTabEvent = 0) }
     }
 
     private fun handleFlowError(throwable: Throwable) {
@@ -704,7 +709,12 @@ class TaskViewModel(
             repository.joinSharedChecklist(codeOrUrl)
                 .onSuccess { board ->
                     selectSharedChecklist(board.shareCode)
-                    _uiState.update { it.copy(statusBanner = "Joined shared board: ${board.title}") }
+                    _uiState.update {
+                        it.copy(
+                            statusBanner = "Opened shared board: ${board.title}",
+                            navigateToSharedTabEvent = it.navigateToSharedTabEvent + 1
+                        )
+                    }
                 }
                 .onFailure { t ->
                     _uiState.update { it.copy(errorMessage = FirestoreError.fromThrowable(t).message) }

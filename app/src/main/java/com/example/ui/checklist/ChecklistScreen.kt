@@ -66,6 +66,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +89,7 @@ import com.example.data.model.ChecklistItem
 import com.example.data.model.ChecklistSortOption
 import com.example.data.model.SharedChecklistItem
 import com.example.ui.components.DeviceAlbumBrowser
+import com.example.ui.components.HtmlChecklistItem
 import com.example.ui.components.ImageEditorDialog
 import com.example.ui.components.ImageUtils
 import com.example.ui.components.PickerPhotoItem
@@ -108,6 +110,12 @@ fun ChecklistScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var selectedSubTab by rememberSaveable { mutableIntStateOf(0) } // 0 = My Stock, 1 = Shared Live
+    LaunchedEffect(uiState.navigateToSharedTabEvent) {
+        if (uiState.navigateToSharedTabEvent > 0) {
+            selectedSubTab = 1
+            viewModel.consumeSharedTabNavigation()
+        }
+    }
     var searchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
 
@@ -474,12 +482,21 @@ fun ChecklistScreen(
                                         val grouped = sortedCategories.map { cat ->
                                             cat to activePersonalItems
                                                 .filter { it.category.equals(cat, ignoreCase = true) }
-                                                .map { Triple(it.title, it.quantity, it.isChecked) }
+                                                .map {
+                                                    HtmlChecklistItem(
+                                                        title = it.title,
+                                                        quantity = it.quantity,
+                                                        notes = it.notes,
+                                                        isChecked = it.isChecked,
+                                                        imageBase64 = it.imageBase64,
+                                                        updatedAt = it.updatedAt
+                                                    )
+                                                }
                                         }.filter { it.second.isNotEmpty() }
                                         ShareUtils.exportChecklistHtmlFile(
                                             context = context,
                                             title = "ShopKeep Restock Checklist",
-                                            items = grouped
+                                            sections = grouped
                                         )
                                     },
                                     leadingIcon = {
@@ -755,6 +772,33 @@ fun ChecklistScreen(
                                         leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(15.dp)) },
                                         label = { Text("Categories") },
                                         modifier = Modifier.height(32.dp).testTag("edit_shared_categories_button")
+                                    )
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            val grouped = sharedCategories.map { cat ->
+                                                cat to uiState.activeSharedItems
+                                                    .filter { it.category.equals(cat, ignoreCase = true) }
+                                                    .map {
+                                                        HtmlChecklistItem(
+                                                            title = it.title,
+                                                            quantity = it.quantity,
+                                                            notes = it.notes,
+                                                            isChecked = it.isChecked,
+                                                            imageBase64 = it.imageBase64,
+                                                            updatedAt = it.updatedAt
+                                                        )
+                                                    }
+                                            }.filter { it.second.isNotEmpty() }
+                                            ShareUtils.exportChecklistHtmlFile(
+                                                context = context,
+                                                title = activeBoard.title.ifBlank { "ShopKeep Live Board" },
+                                                sections = grouped
+                                            )
+                                        },
+                                        leadingIcon = { Icon(Icons.Rounded.Html, contentDescription = "Export shared board HTML", modifier = Modifier.size(15.dp)) },
+                                        label = { Text("HTML") },
+                                        modifier = Modifier.height(32.dp).testTag("export_shared_html_checklist_button")
                                     )
                                 }
                                 if (uiState.sharedChecklists.isNotEmpty()) {

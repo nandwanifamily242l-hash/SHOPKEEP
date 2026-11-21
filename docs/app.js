@@ -9,13 +9,14 @@ import {
 import {
   getFirestore,
   doc,
+  getDoc,
   collection,
   onSnapshot,
   setDoc,
   updateDoc,
   deleteDoc,
   query,
-  orderBy
+  where
 } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -29,6 +30,7 @@ const firebaseConfig = {
 
 const DATABASE_ID = "ai-studio-android-homekeep-8502e84b-2339-4853-b108-eaf44e3bbe94";
 const PUBLIC_DEFAULT_DOC = "PUBLIC_DEFAULT";
+const KNOWN_BOARDS_STORAGE_KEY = "shopkeep_known_boards_v1";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -43,6 +45,8 @@ const emptyTitle = document.getElementById("emptyTitle");
 const emptyDesc = document.getElementById("emptyDesc");
 const boardTitle = document.getElementById("boardTitle");
 const boardMeta = document.getElementById("boardMeta");
+const boardSwitcherBar = document.getElementById("boardSwitcherBar");
+const boardSelect = document.getElementById("boardSelect");
 const categoriesContainer = document.getElementById("categoriesContainer");
 const categoryFilterBar = document.getElementById("categoryFilterBar");
 const viewCategoriesBtn = document.getElementById("viewCategoriesBtn");
@@ -69,6 +73,7 @@ let currentUser = null;
 let currentBoardData = null;
 let latestItemsSnap = null;
 let unsubDefault = null;
+let unsubOwned = null;
 let unsubBoard = null;
 let unsubItems = null;
 let activeCode = null;
@@ -77,6 +82,129 @@ let lightboxCurrentItemId = null;
 let viewMode = "categories"; // "categories" | "all-grid"
 let gridDensity = "standard"; // "standard" | "compact"
 let selectedCategoryFilter = "ALL";
+let userSelectedBoardManually = false;
+let publicDirectoryBoards = [];
+let ownedBoards = [];
+let localKnownBoards = loadLocalBoards();
+
+function normalizeShareCode(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .toUpperCase();
+}
+
+function loadLocalBoards() {
+  try {
+    const raw = window.localStorage.getItem(KNOWN_BOARDS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry) => entry && entry.shareCode)
+      .map((entry) => ({
+        shareCode: normalizeShareCode(entry.shareCode),
+        title: String(entry.title || "Shop Checklist").trim()
+      }))
+      .filter((entry) => entry.shareCode && entry.shareCode !== PUBLIC_DEFAULT_DOC);
+  } catch {
+    return [];
+  }
+}
+
+function rememberBoardLocally(shareCode, title) {
+  const code = normalizeShareCode(shareCode);
+  if (!code || code === PUBLIC_DEFAULT_DOC) return;
+  const cleanTitle = String(title || "Shop Checklist").trim() || "Shop Checklist";
+  const next = localKnownBoards.filter((b) => b.shareCode !== code);
+  next.unshift({ shareCode: code, title: cleanTitle });
+  localKnownBoards = next.slice(0, 20);
+  try {
+    window.localStorage.setItem(KNOWN_BOARDS_STORAGE_KEY, JSON.stringify(localKnownBoards));
+  } catch {
+    // Ignore storage quota / privacy mode errors
+  }
+}
+
+function buildBoardOptionsList() {
+  const byCode = new Map();
+
+  const addEntry = (shareCode, title, sortOrder = 9999) => {
+    const code = normalizeShareCode(shareCode);
+    if (!code || code === PUBLIC_DEFAULT_DOC) return;
+    const cleanTitle = String(title || "").trim() || code;
+    if (!byCode.has(code)) {
+      byCode.set(code, { shareCode: code, title: cleanTitle, sortOrder });
+    } else {
+      const existing = byCode.get(code);
+      if (cleanTitle && cleanTitle !== code) existing.title = cleanTitle;
+      if (typeof sortOrder === "number" && sortOrder < existing.sortOrder) {
+        existing.sortOrder = sortOrder;
+      }
+    }
+  };
+
+  publicDirectoryBoards.forEach((b, idx) =>
+    addEntry(b.shareCode, b.title, typeof b.sortOrder === "number" ? b.sortOrder : idx)
+  );
+  ownedBoards.forEach((b, idx) =>
+    addEntry(b.shareCode, b.title, typeof b.sortOrder === "number" ? b.sortOrder : 100 + idx)
+  );
+  if (activeCode && currentBoardData) {
+    addEntry(activeCode, currentBoardData.title || activeCode, 500);
+  } else if (activeCode) {
+    addEntry(activeCode, activeCode, 500);
+  }
+  localKnownBoards.forEach((b, idx) => addEntry(b.shareCode, b.title, 1000 + idx));
+
+  return Array.from(byCode.values()).sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.title.localeCompare(b.title);
+  });
+}
+
+function renderBoardSwitcher() {
+  if (!boardSwitcherBar || !boardSelect) return;
+  const options = buildBoardOptionsList();
+  if (options.length === 0) {
+    boardSwitcherBar.classList.add("hidden");
+    boardSelect.innerHTML = "";
+    return;
+  }
+
+  boardSelect.innerHTML = "";
+  options.forEach((entry) => {
+    const opt = document.createElement("option");
+    opt.value = entry.shareCode;
+    opt.textContent = `${entry.title} (${entry.shareCode})`;
+    if (activeCode && entry.shareCode === activeCode) {
+      opt.selected = true;
+    }
+    boardSelect.appendChild(opt);
+  });
+
+  if (activeCode) {
+    boardSelect.value = activeCode;
+  }
+  boardSwitcherBar.classList.remove("hidden");
+}
+
+if (boardSelect) {
+  boardSelect.addEventListener("change", () => {
+    const selected = normalizeShareCode(boardSelect.value);
+    if (!selected || selected === activeCode) return;
+    userSelectedBoardManually = true;
+    selectedCategoryFilter = "ALL";
+    openBoard(selected);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("checklist", selected);
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // Ignore history errors
+    }
+  });
+}
 
 function isItemChecked(item) {
   return Boolean(item && (item.isChecked === true || item.checked === true));
@@ -187,8 +315,46 @@ function refreshAccessUi() {
   }
 }
 
+function subscribeToOwnedBoards(uid) {
+  if (unsubOwned) {
+    unsubOwned();
+    unsubOwned = null;
+  }
+  if (!uid) {
+    ownedBoards = [];
+    renderBoardSwitcher();
+    return;
+  }
+  const ownedQuery = query(
+    collection(db, "shared_checklists"),
+    where("memberIds", "array-contains", uid)
+  );
+  unsubOwned = onSnapshot(
+    ownedQuery,
+    (snap) => {
+      const list = [];
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const code = normalizeShareCode(data.shareCode || docSnap.id);
+        if (!code || code === PUBLIC_DEFAULT_DOC) return;
+        list.push({
+          shareCode: code,
+          title: String(data.title || "Shop Checklist").trim(),
+          sortOrder: typeof data.sortOrder === "number" ? data.sortOrder : 0
+        });
+      });
+      ownedBoards = list;
+      renderBoardSwitcher();
+    },
+    () => {
+      // Ignore transient query errors; public directory still works
+    }
+  );
+}
+
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
+  subscribeToOwnedBoards(user ? user.uid : null);
   refreshAccessUi();
 });
 
@@ -413,7 +579,10 @@ function renderItems(snap) {
   let totalCount = 0;
   let pendingCount = 0;
 
-  snap.forEach((docSnap) => {
+  const docs = snap && snap.docs ? [...snap.docs] : [];
+  docs.sort((a, b) => toMillis(b.data()?.createdAt) - toMillis(a.data()?.createdAt));
+
+  docs.forEach((docSnap) => {
     const item = { id: docSnap.id, ...docSnap.data() };
     const cat = (item.category || "Supplies").trim() || "Supplies";
     item.category = cat;
@@ -569,12 +738,33 @@ function renderItems(snap) {
   });
 }
 
-function openBoard(rawCode) {
-  const code = (rawCode || "").trim().toUpperCase();
+async function openBoard(rawCode) {
+  let code = normalizeShareCode(rawCode);
   if (!code) return;
+
+  if (code === PUBLIC_DEFAULT_DOC) {
+    try {
+      const defaultSnap = await getDoc(doc(db, "shared_checklists", PUBLIC_DEFAULT_DOC));
+      const resolved = defaultSnap.exists() ? normalizeShareCode(defaultSnap.data()?.activeShareCode) : "";
+      if (resolved && resolved !== PUBLIC_DEFAULT_DOC) {
+        code = resolved;
+      } else {
+        boardSection.classList.add("hidden");
+        emptyState.classList.remove("hidden");
+        emptyTitle.textContent = "Waiting for Live Board...";
+        emptyDesc.textContent = "Open ShopKeep -> Checklists -> tap \"Public Link\" once.";
+        return;
+      }
+    } catch {
+      subscribeToPublicDirectory(true);
+      return;
+    }
+  }
+
   if (activeCode === code && unsubBoard && unsubItems) return;
 
   activeCode = code;
+  latestItemsSnap = null;
   if (codeInput) codeInput.value = code;
   renderBoardSwitcher();
 
@@ -583,6 +773,9 @@ function openBoard(rawCode) {
 
   boardSection.classList.remove("hidden");
   emptyState.classList.add("hidden");
+  boardTitle.textContent = "Loading Live Checklist...";
+  boardMeta.textContent = `Connecting to board ${code}...`;
+  categoriesContainer.innerHTML = '<p class="subtitle">Loading items and photos...</p>';
 
   const boardRef = doc(db, "shared_checklists", code);
   unsubBoard = onSnapshot(
@@ -591,7 +784,7 @@ function openBoard(rawCode) {
       if (!snap.exists()) {
         currentBoardData = null;
         boardTitle.textContent = `Checklist "${code}" not found`;
-        boardMeta.textContent = "Ask the shop owner to tap 'Publish & Share Public Live Link' in ShopKeep.";
+        boardMeta.textContent = "Ask the shop owner to share an updated Public Link from ShopKeep.";
         renderBoardSwitcher();
         refreshAccessUi();
         return;
@@ -608,12 +801,9 @@ function openBoard(rawCode) {
     }
   );
 
-  const itemsQuery = query(
-    collection(db, "shared_checklists", code, "items"),
-    orderBy("createdAt", "desc")
-  );
+  const itemsColRef = collection(db, "shared_checklists", code, "items");
   unsubItems = onSnapshot(
-    itemsQuery,
+    itemsColRef,
     (snap) => {
       latestItemsSnap = snap;
       renderItems(snap);
@@ -647,14 +837,14 @@ function subscribeToPublicDirectory(autoOpenDefault = true) {
       publicDirectoryBoards = dirRaw
         .filter((entry) => entry && entry.shareCode)
         .map((entry) => ({
-          shareCode: String(entry.shareCode).trim().toUpperCase(),
+          shareCode: normalizeShareCode(entry.shareCode),
           title: String(entry.title || "Shop Checklist").trim(),
           sortOrder: typeof entry.sortOrder === "number" ? entry.sortOrder : 0
         }));
 
       renderBoardSwitcher();
 
-      const targetCode = (data.activeShareCode || "").trim().toUpperCase() ||
+      const targetCode = normalizeShareCode(data.activeShareCode) ||
         (publicDirectoryBoards[0]?.shareCode || "");
 
       if (autoOpenDefault && !userSelectedBoardManually) {
@@ -678,14 +868,14 @@ function subscribeToPublicDirectory(autoOpenDefault = true) {
 }
 
 openCodeBtn.addEventListener("click", () => {
-  const val = codeInput.value.trim();
+  const val = normalizeShareCode(codeInput.value);
   if (val) {
     userSelectedBoardManually = true;
     selectedCategoryFilter = "ALL";
     openBoard(val);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("checklist", val.toUpperCase());
+      url.searchParams.set("checklist", val);
       window.history.replaceState(null, "", url.toString());
     } catch {
       // Ignore history errors
@@ -844,8 +1034,20 @@ addItemForm.addEventListener("submit", async (e) => {
   }
 });
 
-const params = new URLSearchParams(window.location.search);
-const initialCode = (params.get("checklist") || "").trim();
+function extractInitialShareCodeFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const direct = normalizeShareCode(params.get("checklist") || params.get("board") || "");
+  if (direct && direct !== PUBLIC_DEFAULT_DOC) return direct;
+  const pathMatch = window.location.pathname.match(/\/checklist\/([^/?#]+)/i);
+  if (pathMatch && pathMatch[1]) {
+    const seg = normalizeShareCode(pathMatch[1]);
+    if (seg && seg !== PUBLIC_DEFAULT_DOC) return seg;
+  }
+  return "";
+}
+
+const initialCode = extractInitialShareCodeFromUrl();
+renderBoardSwitcher();
 if (initialCode) {
   userSelectedBoardManually = true;
   openBoard(initialCode);

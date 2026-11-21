@@ -790,8 +790,16 @@ class TaskRepository(
 
     suspend fun joinSharedChecklist(rawCodeOrUrl: String): Result<SharedChecklist> = runCatching {
         val uid = requireUid()
-        val code = extractShareCode(rawCodeOrUrl)
+        var code = extractShareCode(rawCodeOrUrl)
         require(code.isNotBlank()) { "Invalid share code or link" }
+        if (code == PUBLIC_DEFAULT_BOARD_ID) {
+            val pointerSnap = sharedChecklistsCol().document(PUBLIC_DEFAULT_BOARD_ID).get().await()
+            val activeCode = pointerSnap.getString("activeShareCode")?.trim()?.uppercase().orEmpty()
+            if (activeCode.isBlank()) {
+                throw NoSuchElementException("No public live board has been published yet")
+            }
+            code = activeCode
+        }
         val docRef = sharedChecklistsCol().document(code)
         val snap = docRef.get().await()
         val board = snap.toObjectSafe<SharedChecklist>()?.copy(id = snap.id)
@@ -1099,11 +1107,16 @@ class TaskRepository(
         val trimmed = input.trim()
         if (trimmed.contains("checklist=")) {
             val after = trimmed.substringAfter("checklist=").substringBefore("&").substringBefore("#")
-            return after.trim().uppercase()
+            val decoded = after.trim().trim('/').uppercase()
+            if (decoded.isNotEmpty()) return decoded
         }
         if (trimmed.contains("/checklist/")) {
-            val after = trimmed.substringAfter("/checklist/").substringBefore("?").substringBefore("/")
-            return after.trim().uppercase()
+            val after = trimmed.substringAfter("/checklist/").substringBefore("?").substringBefore("#").substringBefore("/")
+            val decoded = after.trim().uppercase()
+            if (decoded.isNotEmpty()) return decoded
+        }
+        if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+            return PUBLIC_DEFAULT_BOARD_ID
         }
         return trimmed.uppercase()
     }
