@@ -7,7 +7,7 @@ import {
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
 import {
-  getFirestore,
+  initializeFirestore,
   doc,
   getDoc,
   collection,
@@ -31,10 +31,16 @@ const firebaseConfig = {
 const DATABASE_ID = "ai-studio-android-homekeep-8502e84b-2339-4853-b108-eaf44e3bbe94";
 const PUBLIC_DEFAULT_DOC = "PUBLIC_DEFAULT";
 const KNOWN_BOARDS_STORAGE_KEY = "shopkeep_known_boards_v1";
+const FIRESTORE_REST_BASE =
+  `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${DATABASE_ID}/documents`;
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app, DATABASE_ID);
+const db = initializeFirestore(
+  app,
+  { experimentalForceLongPolling: true },
+  DATABASE_ID
+);
 const provider = new GoogleAuthProvider();
 
 const codeInput = document.getElementById("codeInput");
@@ -43,8 +49,10 @@ const boardSection = document.getElementById("boardSection");
 const emptyState = document.getElementById("emptyState");
 const emptyTitle = document.getElementById("emptyTitle");
 const emptyDesc = document.getElementById("emptyDesc");
+const retryLoadBtn = document.getElementById("retryLoadBtn");
 const boardTitle = document.getElementById("boardTitle");
 const boardMeta = document.getElementById("boardMeta");
+const boardSwitcherCard = document.getElementById("boardSwitcherCard");
 const boardSwitcherBar = document.getElementById("boardSwitcherBar");
 const boardSelect = document.getElementById("boardSelect");
 const categoriesContainer = document.getElementById("categoriesContainer");
@@ -71,7 +79,8 @@ const accessBadge = document.getElementById("accessBadge");
 
 let currentUser = null;
 let currentBoardData = null;
-let latestItemsSnap = null;
+let latestItemsList = [];
+let hasItemsLoadedForBoard = false;
 let unsubDefault = null;
 let unsubOwned = null;
 let unsubBoard = null;
@@ -92,6 +101,79 @@ function normalizeShareCode(raw) {
     .trim()
     .replace(/^\/+|\/+$/g, "")
     .toUpperCase();
+}
+
+function decodeFirestoreValue(val) {
+  if (!val || typeof val !== "object") return undefined;
+  if ("stringValue" in val) return val.stringValue;
+  if ("booleanValue" in val) return Boolean(val.booleanValue);
+  if ("integerValue" in val) return Number(val.integerValue);
+  if ("doubleValue" in val) return Number(val.doubleValue);
+  if ("timestampValue" in val) return Date.parse(val.timestampValue) || 0;
+  if ("nullValue" in val) return null;
+  if ("arrayValue" in val) {
+    const arr = val.arrayValue && Array.isArray(val.arrayValue.values) ? val.arrayValue.values : [];
+    return arr.map(decodeFirestoreValue);
+  }
+  if ("mapValue" in val) {
+    const fields = (val.mapValue && val.mapValue.fields) || {};
+    const out = {};
+    for (const [k, v] of Object.entries(fields)) {
+      out[k] = decodeFirestoreValue(v);
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function decodeFirestoreDoc(docObj) {
+  if (!docObj || !docObj.fields) return null;
+  const id = String(docObj.name || "").split("/").pop() || "";
+  const data = decodeFirestoreValue({ mapValue: { fields: docObj.fields } }) || {};
+  return { id, ...data };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function fetchFirestoreDocRest(path) {
+  const url = `${FIRESTORE_REST_BASE}/${path}?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
+  const res = await fetchWithTimeout(url, { method: "GET" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  return decodeFirestoreDoc(json);
+}
+
+async function fetchBoardItemsRest(code) {
+  const url = `${FIRESTORE_REST_BASE}/shared_checklists/${encodeURIComponent(code)}:runQuery?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
+  const res = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: "items" }]
+      }
+    })
+  }, 15000);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const rows = await res.json();
+  if (!Array.isArray(rows)) return [];
+  const items = [];
+  for (const row of rows) {
+    if (row && row.document) {
+      const decoded = decodeFirestoreDoc(row.document);
+      if (decoded) items.push(decoded);
+    }
+  }
+  return items;
 }
 
 function loadLocalBoards() {
@@ -165,14 +247,19 @@ function buildBoardOptionsList() {
 
 function renderBoardSwitcher() {
   if (!boardSwitcherBar || !boardSelect) return;
+  if (boardSwitcherCard) boardSwitcherCard.classList.remove("hidden");
+  boardSwitcherBar.classList.remove("hidden");
+
   const options = buildBoardOptionsList();
+  boardSelect.innerHTML = "";
   if (options.length === 0) {
-    boardSwitcherBar.classList.add("hidden");
-    boardSelect.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Loading live boards...";
+    boardSelect.appendChild(placeholder);
     return;
   }
 
-  boardSelect.innerHTML = "";
   options.forEach((entry) => {
     const opt = document.createElement("option");
     opt.value = entry.shareCode;
@@ -186,7 +273,6 @@ function renderBoardSwitcher() {
   if (activeCode) {
     boardSelect.value = activeCode;
   }
-  boardSwitcherBar.classList.remove("hidden");
 }
 
 if (boardSelect) {
@@ -258,28 +344,28 @@ if (viewCategoriesBtn) {
   viewCategoriesBtn.addEventListener("click", () => {
     viewMode = "categories";
     updateToolbarButtons();
-    if (latestItemsSnap) renderItems(latestItemsSnap);
+    if (hasItemsLoadedForBoard) renderItems(latestItemsList);
   });
 }
 if (viewAllGridBtn) {
   viewAllGridBtn.addEventListener("click", () => {
     viewMode = "all-grid";
     updateToolbarButtons();
-    if (latestItemsSnap) renderItems(latestItemsSnap);
+    if (hasItemsLoadedForBoard) renderItems(latestItemsList);
   });
 }
 if (densityStandardBtn) {
   densityStandardBtn.addEventListener("click", () => {
     gridDensity = "standard";
     updateToolbarButtons();
-    if (latestItemsSnap) renderItems(latestItemsSnap);
+    if (hasItemsLoadedForBoard) renderItems(latestItemsList);
   });
 }
 if (densityCompactBtn) {
   densityCompactBtn.addEventListener("click", () => {
     gridDensity = "compact";
     updateToolbarButtons();
-    if (latestItemsSnap) renderItems(latestItemsSnap);
+    if (hasItemsLoadedForBoard) renderItems(latestItemsList);
   });
 }
 
@@ -310,8 +396,8 @@ function refreshAccessUi() {
     addItemForm.classList.add("hidden");
   }
 
-  if (latestItemsSnap) {
-    renderItems(latestItemsSnap);
+  if (hasItemsLoadedForBoard) {
+    renderItems(latestItemsList);
   }
 }
 
@@ -376,6 +462,13 @@ signInBtn.addEventListener("click", async () => {
 
 signOutBtn.addEventListener("click", () => signOut(auth));
 
+function updateLocalItemCheckedState(itemId, nextChecked, updatedAt) {
+  latestItemsList = latestItemsList.map((it) =>
+    it.id === itemId ? { ...it, isChecked: nextChecked, updatedAt } : it
+  );
+  renderItems(latestItemsList);
+}
+
 function buildPhotoGridElement(list, { showCategoryBadge = false, canToggle, canManage }) {
   const grid = document.createElement("div");
   grid.className = `photo-notes-grid${gridDensity === "compact" ? " compact" : ""}`;
@@ -419,14 +512,17 @@ function buildPhotoGridElement(list, { showCategoryBadge = false, canToggle, can
     circleBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!canToggleChecklist()) return;
+      const now = Date.now();
+      const targetBoardCode = activeCode;
       circleBtn.disabled = true;
+      updateLocalItemCheckedState(item.id, !checked, now);
       try {
-        await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
+        await updateDoc(doc(db, "shared_checklists", targetBoardCode, "items", item.id), {
           isChecked: !checked,
-          updatedAt: Date.now()
+          updatedAt: now
         });
       } catch (err) {
-        circleBtn.disabled = false;
+        updateLocalItemCheckedState(item.id, checked, item.updatedAt || 0);
         alert("Could not update photo note: " + (err?.message || "Permission denied"));
       }
     });
@@ -485,13 +581,17 @@ function buildTextItemRow(item, { canToggle, canManage, showCategoryTag = false 
   cb.disabled = !canToggle;
   cb.addEventListener("change", async () => {
     if (!canToggleChecklist()) return;
+    const next = cb.checked;
+    const now = Date.now();
+    const targetBoardCode = activeCode;
+    updateLocalItemCheckedState(item.id, next, now);
     try {
-      await updateDoc(doc(db, "shared_checklists", activeCode, "items", item.id), {
-        isChecked: cb.checked,
-        updatedAt: Date.now()
+      await updateDoc(doc(db, "shared_checklists", targetBoardCode, "items", item.id), {
+        isChecked: next,
+        updatedAt: now
       });
     } catch (err) {
-      cb.checked = !cb.checked;
+      updateLocalItemCheckedState(item.id, !next, item.updatedAt || 0);
       alert("Could not update item: " + (err?.message || "Permission denied"));
     }
   });
@@ -556,7 +656,7 @@ function renderCategoryFilterChips(sortedCats) {
   allChip.textContent = `All (${sortedCats.length})`;
   allChip.addEventListener("click", () => {
     selectedCategoryFilter = "ALL";
-    if (latestItemsSnap) renderItems(latestItemsSnap);
+    if (hasItemsLoadedForBoard) renderItems(latestItemsList);
   });
   categoryFilterBar.appendChild(allChip);
 
@@ -567,23 +667,38 @@ function renderCategoryFilterChips(sortedCats) {
     chip.textContent = cat;
     chip.addEventListener("click", () => {
       selectedCategoryFilter = cat;
-      if (latestItemsSnap) renderItems(latestItemsSnap);
+      if (hasItemsLoadedForBoard) renderItems(latestItemsList);
     });
     categoryFilterBar.appendChild(chip);
   });
 }
 
-function renderItems(snap) {
+function normalizeSnapshotDocs(snapOrArray) {
+  if (Array.isArray(snapOrArray)) {
+    return snapOrArray.map((item) => ({ ...item }));
+  }
+  const list = [];
+  if (snapOrArray && snapOrArray.docs) {
+    snapOrArray.docs.forEach((docSnap) => {
+      list.push({ id: docSnap.id, ...docSnap.data() });
+    });
+  }
+  return list;
+}
+
+function renderItems(snapOrArray) {
+  const rawItems = normalizeSnapshotDocs(snapOrArray);
+  rawItems.sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+  latestItemsList = rawItems;
+  hasItemsLoadedForBoard = true;
+
   const allItems = [];
   const grouped = new Map();
   let totalCount = 0;
   let pendingCount = 0;
 
-  const docs = snap && snap.docs ? [...snap.docs] : [];
-  docs.sort((a, b) => toMillis(b.data()?.createdAt) - toMillis(a.data()?.createdAt));
-
-  docs.forEach((docSnap) => {
-    const item = { id: docSnap.id, ...docSnap.data() };
+  rawItems.forEach((raw) => {
+    const item = { ...raw };
     const cat = (item.category || "Supplies").trim() || "Supplies";
     item.category = cat;
     allItems.push(item);
@@ -738,14 +853,31 @@ function renderItems(snap) {
   });
 }
 
+function applyBoardData(code, boardData) {
+  if (activeCode !== code) return;
+  if (!boardData) {
+    currentBoardData = null;
+    boardTitle.textContent = `Checklist "${code}" not found`;
+    boardMeta.textContent = "Ask the shop owner to share an updated Public Link from ShopKeep.";
+    renderBoardSwitcher();
+    refreshAccessUi();
+    return;
+  }
+  currentBoardData = boardData;
+  boardTitle.textContent = currentBoardData.title || "ShopKeep Checklist";
+  rememberBoardLocally(code, boardTitle.textContent);
+  renderBoardSwitcher();
+  refreshAccessUi();
+}
+
 async function openBoard(rawCode) {
   let code = normalizeShareCode(rawCode);
   if (!code) return;
 
   if (code === PUBLIC_DEFAULT_DOC) {
     try {
-      const defaultSnap = await getDoc(doc(db, "shared_checklists", PUBLIC_DEFAULT_DOC));
-      const resolved = defaultSnap.exists() ? normalizeShareCode(defaultSnap.data()?.activeShareCode) : "";
+      const defaultData = await fetchFirestoreDocRest(`shared_checklists/${PUBLIC_DEFAULT_DOC}`);
+      const resolved = defaultData ? normalizeShareCode(defaultData.activeShareCode) : "";
       if (resolved && resolved !== PUBLIC_DEFAULT_DOC) {
         code = resolved;
       } else {
@@ -764,7 +896,8 @@ async function openBoard(rawCode) {
   if (activeCode === code && unsubBoard && unsubItems) return;
 
   activeCode = code;
-  latestItemsSnap = null;
+  latestItemsList = [];
+  hasItemsLoadedForBoard = false;
   if (codeInput) codeInput.value = code;
   renderBoardSwitcher();
 
@@ -773,31 +906,45 @@ async function openBoard(rawCode) {
 
   boardSection.classList.remove("hidden");
   emptyState.classList.add("hidden");
+  if (retryLoadBtn) retryLoadBtn.classList.add("hidden");
   boardTitle.textContent = "Loading Live Checklist...";
   boardMeta.textContent = `Connecting to board ${code}...`;
   categoriesContainer.innerHTML = '<p class="subtitle">Loading items and photos...</p>';
 
+  // Fast REST bootstrap so the board and photos render immediately on mobile networks
+  fetchFirestoreDocRest(`shared_checklists/${encodeURIComponent(code)}`)
+    .then((data) => applyBoardData(code, data))
+    .catch((err) => {
+      if (activeCode === code && !currentBoardData) {
+        boardMeta.textContent = `Syncing (${err?.message || "network"})...`;
+      }
+    });
+
+  fetchBoardItemsRest(code)
+    .then((items) => {
+      if (activeCode === code && !hasItemsLoadedForBoard) {
+        renderItems(items);
+      }
+    })
+    .catch((err) => {
+      if (activeCode === code && !hasItemsLoadedForBoard) {
+        categoriesContainer.innerHTML = `<p class="subtitle">Loading live stream (${err?.message || "retrying"})...</p>`;
+      }
+    });
+
+  // Real-time SDK listeners for live mark/unmark & stock updates
   const boardRef = doc(db, "shared_checklists", code);
   unsubBoard = onSnapshot(
     boardRef,
     (snap) => {
-      if (!snap.exists()) {
-        currentBoardData = null;
-        boardTitle.textContent = `Checklist "${code}" not found`;
-        boardMeta.textContent = "Ask the shop owner to share an updated Public Link from ShopKeep.";
-        renderBoardSwitcher();
-        refreshAccessUi();
-        return;
-      }
-      currentBoardData = snap.data();
-      boardTitle.textContent = currentBoardData.title || "ShopKeep Checklist";
-      rememberBoardLocally(code, boardTitle.textContent);
-      renderBoardSwitcher();
-      refreshAccessUi();
+      if (activeCode !== code) return;
+      applyBoardData(code, snap.exists() ? snap.data() : null);
     },
     (err) => {
-      boardTitle.textContent = "Unable to connect to live board";
-      boardMeta.textContent = err?.message || "Check internet connection.";
+      if (activeCode === code && !currentBoardData) {
+        boardTitle.textContent = "Unable to connect to live board";
+        boardMeta.textContent = err?.message || "Check internet connection.";
+      }
     }
   );
 
@@ -805,66 +952,101 @@ async function openBoard(rawCode) {
   unsubItems = onSnapshot(
     itemsColRef,
     (snap) => {
-      latestItemsSnap = snap;
+      if (activeCode !== code) return;
       renderItems(snap);
     },
     (err) => {
-      categoriesContainer.innerHTML = `<p class="subtitle">Unable to load items: ${err?.message || "Connection error"}</p>`;
+      if (activeCode === code && !hasItemsLoadedForBoard) {
+        categoriesContainer.innerHTML = `<p class="subtitle">Unable to load items: ${err?.message || "Connection error"}</p>`;
+      }
     }
   );
 }
 
+function handlePublicDirectoryData(data, autoOpenDefault) {
+  if (!data) {
+    publicDirectoryBoards = [];
+    renderBoardSwitcher();
+    if (autoOpenDefault && !activeCode) {
+      boardSection.classList.add("hidden");
+      emptyState.classList.remove("hidden");
+      emptyTitle.textContent = "Public Checklist Not Published Yet";
+      emptyDesc.textContent =
+        "Open your ShopKeep Android app -> Checklists -> tap \"Public Link\" once. It will appear here automatically!";
+    }
+    return;
+  }
+
+  const dirRaw = Array.isArray(data.boardsDirectory) ? data.boardsDirectory : [];
+  publicDirectoryBoards = dirRaw
+    .filter((entry) => entry && entry.shareCode)
+    .map((entry) => ({
+      shareCode: normalizeShareCode(entry.shareCode),
+      title: String(entry.title || "Shop Checklist").trim(),
+      sortOrder: typeof entry.sortOrder === "number" ? entry.sortOrder : 0
+    }));
+
+  renderBoardSwitcher();
+
+  const targetCode = normalizeShareCode(data.activeShareCode) ||
+    (publicDirectoryBoards[0]?.shareCode || "");
+
+  if (autoOpenDefault && !userSelectedBoardManually) {
+    if (!targetCode) {
+      if (!activeCode) {
+        emptyTitle.textContent = "Waiting for Live Board...";
+        emptyDesc.textContent = "Tap 'Public Link' in the ShopKeep app.";
+      }
+      return;
+    }
+    openBoard(targetCode);
+  }
+}
+
 function subscribeToPublicDirectory(autoOpenDefault = true) {
+  if (retryLoadBtn) retryLoadBtn.classList.add("hidden");
   if (unsubDefault) unsubDefault();
+
+  // Fast REST bootstrap so dropdown + default board load immediately without waiting on WebChannel
+  fetchFirestoreDocRest(`shared_checklists/${PUBLIC_DEFAULT_DOC}`)
+    .then((data) => handlePublicDirectoryData(data, autoOpenDefault))
+    .catch((err) => {
+      if (autoOpenDefault && !activeCode) {
+        emptyTitle.textContent = "Connection Issue";
+        emptyDesc.textContent = `Could not reach ShopKeep server (${err?.message || "network error"}). Check internet and tap Retry.`;
+        if (retryLoadBtn) retryLoadBtn.classList.remove("hidden");
+      }
+    });
+
   const defaultRef = doc(db, "shared_checklists", PUBLIC_DEFAULT_DOC);
   unsubDefault = onSnapshot(
     defaultRef,
     (snap) => {
-      if (!snap.exists()) {
-        publicDirectoryBoards = [];
-        renderBoardSwitcher();
-        if (autoOpenDefault && !activeCode) {
-          boardSection.classList.add("hidden");
-          emptyState.classList.remove("hidden");
-          emptyTitle.textContent = "Public Checklist Not Published Yet";
-          emptyDesc.textContent =
-            "Open your ShopKeep Android app -> Checklists -> tap \"Public Link\" once. It will appear here automatically!";
-        }
-        return;
-      }
-      const data = snap.data() || {};
-      const dirRaw = Array.isArray(data.boardsDirectory) ? data.boardsDirectory : [];
-      publicDirectoryBoards = dirRaw
-        .filter((entry) => entry && entry.shareCode)
-        .map((entry) => ({
-          shareCode: normalizeShareCode(entry.shareCode),
-          title: String(entry.title || "Shop Checklist").trim(),
-          sortOrder: typeof entry.sortOrder === "number" ? entry.sortOrder : 0
-        }));
-
-      renderBoardSwitcher();
-
-      const targetCode = normalizeShareCode(data.activeShareCode) ||
-        (publicDirectoryBoards[0]?.shareCode || "");
-
-      if (autoOpenDefault && !userSelectedBoardManually) {
-        if (!targetCode) {
-          if (!activeCode) {
-            emptyTitle.textContent = "Waiting for Live Board...";
-            emptyDesc.textContent = "Tap 'Public Link' in the ShopKeep app.";
-          }
-          return;
-        }
-        openBoard(targetCode);
-      }
+      handlePublicDirectoryData(snap.exists() ? snap.data() : null, autoOpenDefault);
     },
     (err) => {
       if (autoOpenDefault && !activeCode) {
         emptyTitle.textContent = "Connection Issue";
         emptyDesc.textContent = err?.message || "Unable to connect to Firebase Firestore.";
+        if (retryLoadBtn) retryLoadBtn.classList.remove("hidden");
       }
     }
   );
+}
+
+if (retryLoadBtn) {
+  retryLoadBtn.addEventListener("click", () => {
+    emptyTitle.textContent = "Reconnecting...";
+    emptyDesc.textContent = "Fetching ShopKeep Live boards...";
+    retryLoadBtn.classList.add("hidden");
+    const code = extractInitialShareCodeFromUrl();
+    if (code) {
+      openBoard(code);
+      subscribeToPublicDirectory(false);
+    } else {
+      subscribeToPublicDirectory(true);
+    }
+  });
 }
 
 openCodeBtn.addEventListener("click", () => {
@@ -948,18 +1130,23 @@ if (clearDraftPhotoBtn) {
 
 if (toggleLightboxBtn && photoLightbox) {
   toggleLightboxBtn.addEventListener("click", async () => {
-    if (!canToggleChecklist() || !activeCode || !lightboxCurrentItemId || !latestItemsSnap) return;
-    const matchDoc = latestItemsSnap.docs.find((d) => d.id === lightboxCurrentItemId);
-    if (!matchDoc) return;
-    const nextChecked = !isItemChecked(matchDoc.data());
+    if (!canToggleChecklist() || !activeCode || !lightboxCurrentItemId) return;
+    const matchItem = latestItemsList.find((it) => it.id === lightboxCurrentItemId);
+    if (!matchItem) return;
+    const prevChecked = isItemChecked(matchItem);
+    const nextChecked = !prevChecked;
+    const now = Date.now();
     toggleLightboxBtn.disabled = true;
+    updateLocalItemCheckedState(lightboxCurrentItemId, nextChecked, now);
+    toggleLightboxBtn.textContent = nextChecked ? "Unmark" : "Mark";
     try {
       await updateDoc(doc(db, "shared_checklists", activeCode, "items", lightboxCurrentItemId), {
         isChecked: nextChecked,
-        updatedAt: Date.now()
+        updatedAt: now
       });
-      toggleLightboxBtn.textContent = nextChecked ? "Unmark" : "Mark";
     } catch (err) {
+      updateLocalItemCheckedState(lightboxCurrentItemId, prevChecked, matchItem.updatedAt || 0);
+      toggleLightboxBtn.textContent = prevChecked ? "Unmark" : "Mark";
       alert("Could not update photo note: " + (err?.message || "Permission denied"));
     } finally {
       toggleLightboxBtn.disabled = false;
@@ -1045,6 +1232,13 @@ function extractInitialShareCodeFromUrl() {
   }
   return "";
 }
+
+window.addEventListener("error", (event) => {
+  if (emptyDesc && !activeCode) {
+    emptyTitle.textContent = "Script Error";
+    emptyDesc.textContent = event?.message || "Unexpected error loading ShopKeep Live.";
+  }
+});
 
 const initialCode = extractInitialShareCodeFromUrl();
 renderBoardSwitcher();

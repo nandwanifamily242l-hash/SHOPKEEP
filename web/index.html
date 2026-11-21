@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ShopKeep Live Checklist</title>
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body>
   <header class="topbar">
@@ -23,6 +23,15 @@
   </header>
 
   <main class="container">
+    <section id="boardSwitcherCard" class="card switcher-card">
+      <div id="boardSwitcherBar" class="board-switcher-bar">
+        <label for="boardSelect" class="board-select-label">Board</label>
+        <select id="boardSelect" class="board-select" aria-label="Switch live board">
+          <option value="">Loading live boards...</option>
+        </select>
+      </div>
+    </section>
+
     <section id="boardSection" class="card hidden">
       <div class="board-header">
         <div>
@@ -30,11 +39,6 @@
           <p id="boardMeta" class="subtitle"></p>
         </div>
         <span id="liveBadge" class="badge-live">LIVE SYNC</span>
-      </div>
-
-      <div id="boardSwitcherBar" class="board-switcher-bar hidden">
-        <label for="boardSelect" class="board-select-label">Board</label>
-        <select id="boardSelect" class="board-select" aria-label="Switch live board"></select>
       </div>
 
       <div id="viewToolbar" class="view-toolbar">
@@ -70,6 +74,7 @@
     <section id="emptyState" class="card empty-state">
       <h2 id="emptyTitle">Loading ShopKeep Live...</h2>
       <p id="emptyDesc">Connecting to real-time shop checklist...</p>
+      <button id="retryLoadBtn" type="button" class="btn btn-primary hidden" style="margin-top:12px;">Retry</button>
     </section>
 
     <details class="card switch-details">
@@ -94,6 +99,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=11"></script>
+  <script type="module" src="app.js?v=12"></script>
 </body>
 </html>
